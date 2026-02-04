@@ -2821,7 +2821,7 @@ app.get('/lc79-hu', async (req, res) => {
       phien: nextPhien.toString(),
       du_doan: normalizeResult(result.prediction),
       ti_le: `${result.confidence}%`,
-      id: '@mryanhdz'
+      id: '@Kapubb'
     });
   } catch (error) {
     console.error('Error:', error);
@@ -2850,7 +2850,7 @@ app.get('/lc79-md5', async (req, res) => {
       phien: nextPhien.toString(),
       du_doan: normalizeResult(result.prediction),
       ti_le: `${result.confidence}%`,
-      id: '@mryanhdz'
+      id: '@Kapubb'
     });
   } catch (error) {
     console.error('Error:', error);
@@ -3112,4 +3112,5 @@ app.listen(PORT, '0.0.0.0', () => {
   
   startAutoSaveTask();
 });
+
 
