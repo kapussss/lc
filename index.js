@@ -2782,7 +2782,7 @@ function savePredictionToHistory(type, phien, prediction, confidence) {
     phien: phien.toString(),
     du_doan: normalizeResult(prediction),
     ti_le: `${confidence}%`,
-    id: '@mryanhdz',
+    id: '@Kapubb',
     timestamp: new Date().toISOString()
   };
   
@@ -2797,7 +2797,7 @@ function savePredictionToHistory(type, phien, prediction, confidence) {
 
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.send('t.me/CuTools');
+  res.send('t.me/@Kapubb');
 });
 
 app.get('/lc79-hu', async (req, res) => {
@@ -3112,3 +3112,4 @@ app.listen(PORT, '0.0.0.0', () => {
   
   startAutoSaveTask();
 });
+
