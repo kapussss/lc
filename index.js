@@ -91,6 +91,8 @@ const DEFAULT_PATTERN_WEIGHTS = {
   'triple_pattern': 1.0
 };
 
+// ==================== ORIGINAL SYSTEM FUNCTIONS ====================
+
 function loadLearningData() {
   try {
     if (fs.existsSync(LEARNING_FILE)) {
@@ -230,26 +232,41 @@ function updatePatternPerformance(type, patternId, isCorrect) {
   if (isCorrect) stats.correct++;
   
   stats.recentResults.push(isCorrect ? 1 : 0);
-  if (stats.recentResults.length > 20) {
+  if (stats.recentResults.length > 30) {
     stats.recentResults.shift();
   }
   
-  const recentAccuracy = stats.recentResults.reduce((a, b) => a + b, 0) / stats.recentResults.length;
+  const recentAccuracy = stats.recentResults.length >= 5 ? 
+    stats.recentResults.slice(-10).reduce((a, b) => a + b, 0) / 
+    Math.min(10, stats.recentResults.length) : 0.5;
+    
   stats.accuracy = stats.total > 0 ? stats.correct / stats.total : 0.5;
   
-  const oldWeight = learningData[type].patternWeights[patternId];
+  const oldWeight = learningData[type].patternWeights[patternId] || 1.0;
   let newWeight = oldWeight;
   
-  if (stats.recentResults.length >= 5) {
-    if (recentAccuracy > 0.6) {
-      newWeight = Math.min(2.0, oldWeight * 1.05);
+  if (stats.recentResults.length >= 10) {
+    if (recentAccuracy > 0.7) {
+      newWeight = Math.min(2.0, oldWeight * 1.08);
+    } else if (recentAccuracy > 0.6) {
+      newWeight = Math.min(1.8, oldWeight * 1.05);
+    } else if (recentAccuracy < 0.3) {
+      newWeight = Math.max(0.3, oldWeight * 0.92);
     } else if (recentAccuracy < 0.4) {
-      newWeight = Math.max(0.3, oldWeight * 0.95);
+      newWeight = Math.max(0.4, oldWeight * 0.95);
+    }
+    
+    if (stats.accuracy > 0.55 && recentAccuracy < 0.4) {
+      newWeight = Math.max(0.7, oldWeight * 0.98);
     }
   }
   
   learningData[type].patternWeights[patternId] = newWeight;
   stats.lastAdjustment = new Date().toISOString();
+  
+  console.log(`[Learning] ${type}.${patternId}: ${isCorrect ? '✅' : '❌'} | ` +
+    `Acc: ${(stats.accuracy*100).toFixed(1)}% | Recent: ${(recentAccuracy*100).toFixed(1)}% | ` +
+    `Weight: ${oldWeight.toFixed(2)} → ${newWeight.toFixed(2)}`);
 }
 
 function recordPrediction(type, phien, prediction, confidence, patterns) {
@@ -2795,9 +2812,11 @@ function savePredictionToHistory(type, phien, prediction, confidence) {
   return record;
 }
 
+// ==================== API ENDPOINTS ====================
+
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.send('t.me/@Kapubb');
+  res.send('t.me/CuTools');
 });
 
 app.get('/lc79-hu', async (req, res) => {
@@ -3040,33 +3059,73 @@ app.get('/lc79-md5/learning', (req, res) => {
   });
 });
 
-app.get('/reset-learning', (req, res) => {
-  learningData = {
-    hu: {
-      predictions: [],
-      patternStats: {},
-      totalPredictions: 0,
-      correctPredictions: 0,
-      patternWeights: { ...DEFAULT_PATTERN_WEIGHTS },
-      lastUpdate: null,
-      streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 },
-      adaptiveThresholds: {},
-      recentAccuracy: []
-    },
-    md5: {
-      predictions: [],
-      patternStats: {},
-      totalPredictions: 0,
-      correctPredictions: 0,
-      patternWeights: { ...DEFAULT_PATTERN_WEIGHTS },
-      lastUpdate: null,
-      streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 },
-      adaptiveThresholds: {},
-      recentAccuracy: []
+// ==================== TRAIN AI ENDPOINT ====================
+
+// Simple AI training endpoint
+app.get('/train-ai', async (req, res) => {
+  try {
+    const dataHu = await fetchDataHu();
+    const dataMd5 = await fetchDataMd5();
+    
+    let trainedSamples = 0;
+    
+    // Hu training
+    if (dataHu && dataHu.length > 30) {
+      for (let i = 0; i < Math.min(20, dataHu.length - 30); i++) {
+        const trainingData = dataHu.slice(i, i + 30);
+        const actual = dataHu[i]?.Ket_qua;
+        
+        if (trainingData.length >= 30 && actual) {
+          // Simulate training by updating pattern weights based on actual results
+          const result = calculateAdvancedPrediction(trainingData, 'hu');
+          const isCorrect = result.prediction === actual;
+          
+          if (result.allPatterns && result.allPatterns.length > 0) {
+            result.allPatterns.forEach(pattern => {
+              if (pattern.patternId) {
+                updatePatternPerformance('hu', pattern.patternId, isCorrect);
+              }
+            });
+          }
+          trainedSamples++;
+        }
+      }
     }
-  };
-  saveLearningData();
-  res.json({ message: 'Learning data reset successfully' });
+    
+    // MD5 training
+    if (dataMd5 && dataMd5.length > 30) {
+      for (let i = 0; i < Math.min(20, dataMd5.length - 30); i++) {
+        const trainingData = dataMd5.slice(i, i + 30);
+        const actual = dataMd5[i]?.Ket_qua;
+        
+        if (trainingData.length >= 30 && actual) {
+          const result = calculateAdvancedPrediction(trainingData, 'md5');
+          const isCorrect = result.prediction === actual;
+          
+          if (result.allPatterns && result.allPatterns.length > 0) {
+            result.allPatterns.forEach(pattern => {
+              if (pattern.patternId) {
+                updatePatternPerformance('md5', pattern.patternId, isCorrect);
+              }
+            });
+          }
+          trainedSamples++;
+        }
+      }
+    }
+    
+    saveLearningData();
+    
+    res.json({
+      message: `AI training completed with ${trainedSamples} samples`,
+      status: 'success',
+      trainedSamples,
+      huPatterns: Object.keys(learningData.hu.patternStats).length,
+      md5Patterns: Object.keys(learningData.md5.patternStats).length
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 loadLearningData();
@@ -3074,29 +3133,12 @@ loadPredictionHistory();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
-  console.log('Lau Cua 79 - Advanced Tai Xiu Prediction API v4.0');
+  console.log('Lau Cua 79 - Advanced Tai Xiu Prediction API');
+  console.log('ID: @Kapubb');
   console.log('');
   console.log('API SOURCES:');
   console.log('  - TX Hũ: ' + API_URL_HU);
   console.log('  - TX MD5: ' + API_URL_MD5);
-  console.log('');
-  console.log('NEW FEATURES:');
-  console.log('  - Self-learning from prediction results');
-  console.log('  - Pattern weight adjustment based on accuracy');
-  console.log('  - Streak analysis and smart reversal');
-  console.log('  - Adaptive confidence based on recent performance');
-  console.log('  - Persistent learning data storage');
-  console.log('  - AUTO-SAVE: History saves automatically every 30s');
-  console.log('  - Enhanced break pattern detection');
-  console.log('');
-  console.log('Supported Patterns:');
-  console.log('  - Cầu Bệt, Đảo 1-1, 2-2, 3-3, 4-4, 5-5');
-  console.log('  - Cầu 1-2-1, 1-2-3, 3-2-1, 2-1-2, 1-2-2-1, 2-1-1-2');
-  console.log('  - Cầu Nhảy Cóc, Nhịp Nghiêng, Ziczac');
-  console.log('  - Cầu 3 Ván 1, Bẻ Cầu, Chu Kỳ');
-  console.log('  - Cầu Đôi, Cầu Gấp, Cầu Rồng');
-  console.log('  - Biểu Đồ Đường, Dây Gãy (Hũ & MD5)');
-  console.log('  - Smart Bet, Momentum, Wave Pattern');
   console.log('');
   console.log('Endpoints:');
   console.log('  / - Homepage');
@@ -3106,11 +3148,9 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  /lc79-md5/lichsu - Lịch sử dự đoán MD5');
   console.log('  /lc79-hu/analysis - Phân tích chi tiết Hũ');
   console.log('  /lc79-md5/analysis - Phân tích chi tiết MD5');
-  console.log('  /lc79-hu/learning - Thống kê học tập Hũ');
-  console.log('  /lc79-md5/learning - Thống kê học tập MD5');
-  console.log('  /reset-learning - Reset dữ liệu học');
+  console.log('  /lc79-hu/learning - Thống kê học Hũ');
+  console.log('  /lc79-md5/learning - Thống kê học MD5');
+  console.log('  /train-ai - Huấn luyện AI');
   
   startAutoSaveTask();
 });
-
-
