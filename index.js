@@ -10,145 +10,297 @@ const API_URL_HU = 'https://wtx.tele68.com/v1/tx/sessions';
 const API_URL_MD5 = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
 const LEARNING_FILE = 'learning_data.json';
 const HISTORY_FILE = 'prediction_history.json';
+const ANOMALY_FILE = 'anomaly_patterns.json';
 
 let predictionHistory = {
   hu: [],
   md5: []
 };
 
-const MAX_HISTORY = 100;
-const AUTO_SAVE_INTERVAL = 30000;
+const MAX_HISTORY = 200;
+const AUTO_SAVE_INTERVAL = 15000;
 let lastProcessedPhien = { hu: null, md5: null };
 
-// ==================== MONTE CARLO SIMULATION MODULE ====================
-class MonteCarloSimulator {
-  constructor(historicalData, windowSize = 30) {
-    this.historicalData = historicalData;
-    this.windowSize = windowSize;
-    this.numSimulations = 10000; // 10,000 simulations for high accuracy
+// ==================== ANOMALY DETECTION ENGINE ====================
+class AnomalyDetector {
+  constructor() {
+    this.anomalyPatterns = [];
+    this.breakPoints = [];
+    this.timeWindowStats = {};
+    this.reinforcementMemory = { tai: 0, xiu: 0, lastAdjustment: null };
   }
 
-  // Extract feature vectors from historical data
-  extractFeatures(data) {
-    if (!data || data.length < 5) return null;
-    
-    const features = {
-      last5Results: data.slice(0, 5).map(d => d.Ket_qua),
-      last5Sums: data.slice(0, 5).map(d => d.Tong),
-      last5Dice1: data.slice(0, 5).map(d => d.Xuc_xac_1),
-      last5Dice2: data.slice(0, 5).map(d => d.Xuc_xac_2),
-      last5Dice3: data.slice(0, 5).map(d => d.Xuc_xac_3),
-      streakLength: this.calculateStreak(data),
-      patternType: this.detectPattern(data),
-      recentTaiRatio: this.calculateTaiRatio(data.slice(0, 10)),
-      sumTrend: this.calculateSumTrend(data.slice(0, 10)),
-      volatility: this.calculateVolatility(data.slice(0, 10))
-    };
-    
-    return features;
+  loadAnomalyData() {
+    try {
+      if (fs.existsSync(ANOMALY_FILE)) {
+        const data = fs.readFileSync(ANOMALY_FILE, 'utf8');
+        const parsed = JSON.parse(data);
+        this.anomalyPatterns = parsed.anomalyPatterns || [];
+        this.breakPoints = parsed.breakPoints || [];
+        this.timeWindowStats = parsed.timeWindowStats || {};
+        console.log(`[Anomaly] Loaded ${this.anomalyPatterns.length} anomaly patterns, ${this.breakPoints.length} break points`);
+      }
+    } catch (error) {
+      console.error('[Anomaly] Load error:', error.message);
+    }
   }
 
-  calculateStreak(data) {
-    if (data.length < 2) return 0;
-    let streak = 1;
-    for (let i = 1; i < data.length; i++) {
-      if (data[i].Ket_qua === data[0].Ket_qua) streak++;
+  saveAnomalyData() {
+    try {
+      fs.writeFileSync(ANOMALY_FILE, JSON.stringify({
+        anomalyPatterns: this.anomalyPatterns.slice(-200),
+        breakPoints: this.breakPoints.slice(-200),
+        timeWindowStats: this.timeWindowStats,
+        lastSaved: new Date().toISOString()
+      }, null, 2));
+    } catch (error) {
+      console.error('[Anomaly] Save error:', error.message);
+    }
+  }
+
+  detectAnomaly(results, windowSize = 10) {
+    if (results.length < windowSize) return { isAnomaly: false, score: 0 };
+    
+    const recent = results.slice(0, windowSize);
+    const taiCount = recent.filter(r => r === 'Tài').length;
+    const xiuCount = windowSize - taiCount;
+    
+    const expectedRatio = 0.5;
+    const actualRatio = taiCount / windowSize;
+    const deviation = Math.abs(actualRatio - expectedRatio);
+    
+    const isAnomaly = deviation > 0.3;
+    const anomalyScore = Math.min(100, deviation * 200);
+    
+    let breakDetected = false;
+    let breakDirection = null;
+    
+    if (results.length >= 6) {
+      const first5 = results.slice(0, 5);
+      const sixth = results[5];
+      const allSame = first5.every(r => r === first5[0]);
+      if (allSame && sixth !== first5[0]) {
+        breakDetected = true;
+        breakDirection = sixth;
+        this.recordBreakPoint(first5[0], sixth, new Date());
+      }
+    }
+    
+    let alternatingLength = 1;
+    for (let i = 1; i < Math.min(results.length, 15); i++) {
+      if (results[i] !== results[i-1]) alternatingLength++;
       else break;
     }
-    return streak;
-  }
-
-  detectPattern(data) {
-    if (data.length < 4) return 'unknown';
-    const results = data.slice(0, 4).map(d => d.Ket_qua);
+    const isAlternatingAnomaly = alternatingLength >= 8;
     
-    // Check for alternating pattern
-    if (results[0] !== results[1] && results[1] !== results[2] && results[2] !== results[3]) {
-      return 'alternating';
-    }
-    // Check for streak pattern
-    if (results[0] === results[1] && results[1] === results[2] && results[2] === results[3]) {
-      return 'streak';
-    }
-    // Check for 2-2 pattern
-    if (results[0] === results[1] && results[2] === results[3] && results[0] !== results[2]) {
-      return 'double_pair';
-    }
-    return 'mixed';
+    return {
+      isAnomaly: isAnomaly || breakDetected || isAlternatingAnomaly,
+      score: anomalyScore,
+      deviation: deviation.toFixed(3),
+      taiRatio: (taiCount / windowSize * 100).toFixed(1),
+      breakDetected,
+      breakDirection,
+      alternatingLength,
+      isAlternatingAnomaly
+    };
   }
 
-  calculateTaiRatio(data) {
-    if (data.length === 0) return 0.5;
-    const taiCount = data.filter(d => d.Ket_qua === 'Tài').length;
-    return taiCount / data.length;
-  }
-
-  calculateSumTrend(data) {
-    if (data.length < 3) return 'stable';
-    const sums = data.map(d => d.Tong);
-    let increasing = 0, decreasing = 0;
-    for (let i = 0; i < sums.length - 1; i++) {
-      if (sums[i] < sums[i + 1]) increasing++;
-      else if (sums[i] > sums[i + 1]) decreasing++;
+  recordBreakPoint(fromType, toType, timestamp) {
+    this.breakPoints.push({
+      from: fromType,
+      to: toType,
+      timestamp: timestamp.toISOString(),
+      hour: timestamp.getHours(),
+      minute: timestamp.getMinutes()
+    });
+    
+    if (this.breakPoints.length > 200) {
+      this.breakPoints = this.breakPoints.slice(-200);
     }
-    if (increasing > decreasing + 2) return 'up';
-    if (decreasing > increasing + 2) return 'down';
-    return 'stable';
+    this.saveAnomalyData();
   }
 
-  calculateVolatility(data) {
-    if (data.length < 2) return 0;
-    const sums = data.map(d => d.Tong);
+  predictBreakProbability(currentStreak, currentStreakType, currentHour) {
+    if (this.breakPoints.length < 10) return 0.3;
+    
+    const sameHourBreaks = this.breakPoints.filter(b => {
+      const hour = new Date(b.timestamp).getHours();
+      return hour === currentHour;
+    });
+    
+    const sameTypeBreaks = this.breakPoints.filter(b => b.from === currentStreakType);
+    
+    let probability = 0.3;
+    
+    if (sameHourBreaks.length > 0) {
+      const hourBreakRate = sameHourBreaks.length / Math.max(1, this.breakPoints.length);
+      probability += hourBreakRate * 0.3;
+    }
+    
+    if (sameTypeBreaks.length > 0) {
+      const typeBreakRate = sameTypeBreaks.length / Math.max(1, this.breakPoints.filter(b => b.from === currentStreakType).length + 1);
+      probability += typeBreakRate * 0.2;
+    }
+    
+    probability += Math.min(0.4, currentStreak / 15);
+    
+    return Math.min(0.85, probability);
+  }
+
+  learnFromResult(prediction, actual, confidence) {
+    const isCorrect = prediction === actual;
+    
+    if (isCorrect) {
+      this.reinforcementMemory[prediction === 'Tài' ? 'tai' : 'xiu'] += 1;
+      this.reinforcementMemory.lastAdjustment = new Date().toISOString();
+    } else {
+      const wrongSide = prediction === 'Tài' ? 'tai' : 'xiu';
+      this.reinforcementMemory[wrongSide] = Math.max(0, this.reinforcementMemory[wrongSide] - 0.5);
+    }
+    
+    this.reinforcementMemory.tai = Math.min(10, Math.max(-5, this.reinforcementMemory.tai));
+    this.reinforcementMemory.xiu = Math.min(10, Math.max(-5, this.reinforcementMemory.xiu));
+    
+    this.saveAnomalyData();
+  }
+
+  getBiasCorrection() {
+    const taiScore = this.reinforcementMemory.tai || 0;
+    const xiuScore = this.reinforcementMemory.xiu || 0;
+    const total = Math.abs(taiScore) + Math.abs(xiuScore);
+    
+    if (total < 0.5) return 0;
+    
+    if (taiScore > xiuScore + 1) return 0.15;
+    if (xiuScore > taiScore + 1) return -0.15;
+    
+    return 0;
+  }
+
+  updateTimeWindowStats(result, timestamp) {
+    const hour = timestamp.getHours();
+    const minute = Math.floor(timestamp.getMinutes() / 15) * 15;
+    const windowKey = `${hour}:${minute}`;
+    
+    if (!this.timeWindowStats[windowKey]) {
+      this.timeWindowStats[windowKey] = { tai: 0, xiu: 0, total: 0, lastUpdate: timestamp.toISOString() };
+    }
+    
+    if (result === 'Tài') {
+      this.timeWindowStats[windowKey].tai++;
+    } else {
+      this.timeWindowStats[windowKey].xiu++;
+    }
+    this.timeWindowStats[windowKey].total++;
+    this.timeWindowStats[windowKey].lastUpdate = timestamp.toISOString();
+    
+    this.saveAnomalyData();
+  }
+
+  predictByTimeWindow(currentTimestamp) {
+    const hour = currentTimestamp.getHours();
+    const minute = Math.floor(currentTimestamp.getMinutes() / 15) * 15;
+    const windowKey = `${hour}:${minute}`;
+    
+    const stats = this.timeWindowStats[windowKey];
+    if (!stats || stats.total < 5) return null;
+    
+    const taiRatio = stats.tai / stats.total;
+    if (taiRatio > 0.6) return { prediction: 'Tài', confidence: 55 + Math.round(taiRatio * 20) };
+    if (taiRatio < 0.4) return { prediction: 'Xỉu', confidence: 55 + Math.round((1 - taiRatio) * 20) };
+    
+    return null;
+  }
+}
+
+// ==================== BALANCED MONTE CARLO ====================
+class BalancedMonteCarlo {
+  constructor(historicalData, windowSize = 40) {
+    this.historicalData = historicalData;
+    this.windowSize = windowSize;
+    this.numSimulations = 8000;
+    this.recentWeights = [];
+  }
+
+  extractBalancedFeatures(data) {
+    if (!data || data.length < 8) return null;
+    
+    const results = data.slice(0, this.windowSize).map(d => d.Ket_qua);
+    const sums = data.slice(0, this.windowSize).map(d => d.Tong);
+    
+    const taiCount = results.filter(r => r === 'Tài').length;
+    const xiuCount = results.length - taiCount;
+    const balanceRatio = Math.min(taiCount, xiuCount) / Math.max(taiCount, xiuCount);
+    
+    const last5 = results.slice(0, 5);
+    const last5Tai = last5.filter(r => r === 'Tài').length;
+    const last5Trend = last5Tai >= 4 ? 'strong_tai' : (last5Tai <= 1 ? 'strong_xiu' : 'balanced');
+    
+    const ma5 = sums.slice(0, 5).reduce((a, b) => a + b, 0) / 5;
+    const ma10 = sums.slice(0, 10).reduce((a, b) => a + b, 0) / 10;
+    const sumTrend = ma5 > ma10 + 1 ? 'up' : (ma5 < ma10 - 1 ? 'down' : 'stable');
+    
+    let currentStreak = 1;
+    for (let i = 1; i < results.length; i++) {
+      if (results[i] === results[0]) currentStreak++;
+      else break;
+    }
+    
+    return {
+      last5Results: last5,
+      last5TaiCount: last5Tai,
+      last5Trend,
+      balanceRatio,
+      currentStreak,
+      sumTrend,
+      ma5, ma10,
+      recentVolatility: this.calculateVolatility(sums.slice(0, 10))
+    };
+  }
+
+  calculateVolatility(sums) {
+    if (sums.length < 2) return 0;
     const mean = sums.reduce((a, b) => a + b, 0) / sums.length;
     const variance = sums.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / sums.length;
     return Math.sqrt(variance);
   }
 
-  // Find similar historical patterns
-  findSimilarPatterns(currentFeatures, maxMatches = 100) {
+  findBalancedPatterns(currentFeatures, maxMatches = 80) {
     const matches = [];
     
     for (let i = 0; i <= this.historicalData.length - this.windowSize - 1; i++) {
       const windowData = this.historicalData.slice(i, i + this.windowSize);
-      const windowFeatures = this.extractFeatures(windowData);
+      const windowFeatures = this.extractBalancedFeatures(windowData);
       
       if (!windowFeatures) continue;
       
-      // Calculate similarity score
       let similarity = 0;
       
-      // Compare last result pattern
-      if (windowFeatures.last5Results.join('') === currentFeatures.last5Results.join('')) {
-        similarity += 30;
+      if (windowFeatures.last5Trend === currentFeatures.last5Trend) {
+        similarity += 25;
       }
       
-      // Compare streak length
-      similarity += Math.max(0, 10 - Math.abs(windowFeatures.streakLength - currentFeatures.streakLength));
+      const balanceDiff = Math.abs(windowFeatures.balanceRatio - currentFeatures.balanceRatio);
+      similarity += Math.max(0, 20 - balanceDiff * 30);
       
-      // Compare pattern type
-      if (windowFeatures.patternType === currentFeatures.patternType) {
-        similarity += 20;
+      if (windowFeatures.balanceRatio > 0.4) {
+        similarity += 10;
       }
       
-      // Compare Tai ratio
-      const ratioDiff = Math.abs(windowFeatures.recentTaiRatio - currentFeatures.recentTaiRatio);
-      similarity += Math.max(0, 15 - ratioDiff * 30);
+      const streakDiff = Math.abs(windowFeatures.currentStreak - currentFeatures.currentStreak);
+      similarity += Math.max(0, 15 - streakDiff * 2);
       
-      // Compare sum trend
       if (windowFeatures.sumTrend === currentFeatures.sumTrend) {
         similarity += 15;
       }
       
-      // Compare volatility
-      const volDiff = Math.abs(windowFeatures.volatility - currentFeatures.volatility);
-      similarity += Math.max(0, 10 - volDiff * 5);
-      
-      if (similarity > 20) {
+      if (similarity > 15) {
         matches.push({
           similarity,
           index: i,
           nextResult: this.historicalData[i + this.windowSize]?.Ket_qua,
-          nextSum: this.historicalData[i + this.windowSize]?.Tong
+          nextSum: this.historicalData[i + this.windowSize]?.Tong,
+          windowFeatures
         });
       }
     }
@@ -157,28 +309,46 @@ class MonteCarloSimulator {
     return matches.slice(0, maxMatches);
   }
 
-  // Run Monte Carlo simulation
-  runSimulation(currentData, numSimulations = null) {
-    const simCount = numSimulations || this.numSimulations;
-    const currentFeatures = this.extractFeatures(currentData);
+  runBalancedSimulation(currentData, anomalyDetector, currentHour) {
+    const currentFeatures = this.extractBalancedFeatures(currentData);
     
-    if (!currentFeatures) {
-      return { taiProbability: 0.5, xiuProbability: 0.5, confidence: 50 };
+    if (!currentFeatures || this.historicalData.length < 50) {
+      const last20Results = currentData.slice(0, 20).map(d => d.Ket_qua);
+      const taiCount = last20Results.filter(r => r === 'Tài').length;
+      const taiProb = taiCount / 20;
+      return {
+        taiProbability: taiProb.toFixed(4),
+        xiuProbability: (1 - taiProb).toFixed(4),
+        confidence: 50 + Math.abs(taiProb - 0.5) * 40,
+        prediction: taiProb > 0.5 ? 'Tài' : 'Xỉu',
+        similarPatternsCount: 0,
+        breakProbability: 0.3,
+        balanceRatio: 0.5
+      };
     }
     
-    const similarPatterns = this.findSimilarPatterns(currentFeatures, Math.min(500, simCount));
+    const similarPatterns = this.findBalancedPatterns(currentFeatures, 100);
     
-    if (similarPatterns.length === 0) {
-      return { taiProbability: 0.5, xiuProbability: 0.5, confidence: 50 };
+    if (similarPatterns.length < 5) {
+      const last20Results = currentData.slice(0, 20).map(d => d.Ket_qua);
+      const taiCount = last20Results.filter(r => r === 'Tài').length;
+      const taiProb = taiCount / 20;
+      return {
+        taiProbability: taiProb.toFixed(4),
+        xiuProbability: (1 - taiProb).toFixed(4),
+        confidence: 50 + Math.abs(taiProb - 0.5) * 40,
+        prediction: taiProb > 0.5 ? 'Tài' : 'Xỉu',
+        similarPatternsCount: similarPatterns.length,
+        breakProbability: 0.3,
+        balanceRatio: currentFeatures.balanceRatio.toFixed(2)
+      };
     }
     
     let taiWins = 0;
     let xiuWins = 0;
     let totalWeight = 0;
     
-    // Run simulations using similar patterns as basis
-    for (let sim = 0; sim < simCount; sim++) {
-      // Select a pattern with probability proportional to similarity
+    for (let sim = 0; sim < this.numSimulations; sim++) {
       let selectedPattern;
       if (sim < similarPatterns.length) {
         selectedPattern = similarPatterns[sim];
@@ -187,122 +357,117 @@ class MonteCarloSimulator {
         selectedPattern = similarPatterns[randomIndex];
       }
       
-      const weight = selectedPattern.similarity / 100;
+      let weight = selectedPattern.similarity / 100;
+      
+      if (selectedPattern.windowFeatures && selectedPattern.windowFeatures.balanceRatio > 0.45) {
+        weight *= 1.2;
+      }
+      
       totalWeight += weight;
       
       if (selectedPattern.nextResult === 'Tài') {
         taiWins += weight;
-      } else if (selectedPattern.nextResult === 'Xỉu') {
+      } else {
         xiuWins += weight;
       }
-      
-      // Add random variations for more diverse simulation
-      for (let variation = 0; variation < 3; variation++) {
-        const randomNeighbor = Math.max(0, Math.min(similarPatterns.length - 1, 
-          similarPatterns.indexOf(selectedPattern) + (Math.random() > 0.7 ? 1 : -1) * Math.floor(Math.random() * 5)));
-        
-        if (randomNeighbor >= 0 && randomNeighbor < similarPatterns.length) {
-          const neighborPattern = similarPatterns[randomNeighbor];
-          const neighborWeight = neighborPattern.similarity / 100 * 0.3;
-          
-          if (neighborPattern.nextResult === 'Tài') {
-            taiWins += neighborWeight;
-          } else if (neighborPattern.nextResult === 'Xỉu') {
-            xiuWins += neighborWeight;
-          }
-          totalWeight += neighborWeight;
-        }
-      }
     }
     
-    const taiProbability = taiWins / totalWeight;
-    const xiuProbability = xiuWins / totalWeight;
+    let taiProbability = taiWins / totalWeight;
     
-    // Calculate confidence based on probability spread and sample size
-    const probabilitySpread = Math.abs(taiProbability - xiuProbability);
-    let confidence = 50 + probabilitySpread * 40;
+    const biasCorrection = anomalyDetector.getBiasCorrection();
+    taiProbability += biasCorrection;
+    taiProbability = Math.max(0.3, Math.min(0.7, taiProbability));
     
-    // Boost confidence if many similar patterns found
-    const patternConfidenceBoost = Math.min(15, similarPatterns.length / 10);
-    confidence += patternConfidenceBoost;
+    const currentStreakType = currentData[0]?.Ket_qua;
+    const breakProb = anomalyDetector.predictBreakProbability(
+      currentFeatures.currentStreak, 
+      currentStreakType, 
+      currentHour
+    );
     
-    // Adjust based on recent accuracy
-    confidence = Math.max(50, Math.min(92, confidence));
-    
-    return {
-      taiProbability: taiProbability.toFixed(4),
-      xiuProbability: xiuProbability.toFixed(4),
-      confidence: Math.round(confidence),
-      prediction: taiProbability > xiuProbability ? 'Tài' : 'Xỉu',
-      similarPatternsCount: similarPatterns.length,
-      topSimilarity: similarPatterns[0]?.similarity || 0
-    };
-  }
-
-  // Enhanced simulation with Markov Chain
-  runMarkovChainSimulation(currentData, numSimulations = 5000) {
-    const results = currentData.slice(0, 15).map(d => d.Ket_qua);
-    
-    // Build transition matrix
-    const transitions = { 'Tài': { 'Tài': 0, 'Xỉu': 0 }, 'Xỉu': { 'Tài': 0, 'Xỉu': 0 } };
-    let transitionCount = { 'Tài': 0, 'Xỉu': 0 };
-    
-    for (let i = 0; i < results.length - 1; i++) {
-      const from = results[i];
-      const to = results[i + 1];
-      transitions[from][to]++;
-      transitionCount[from]++;
+    if (breakProb > 0.6 && currentFeatures.currentStreak >= 3) {
+      taiProbability = 1 - taiProbability;
     }
     
-    // Convert to probabilities
-    const transitionProbs = {
-      'Tài': {
-        'Tài': transitionCount['Tài'] > 0 ? transitions['Tài']['Tài'] / transitionCount['Tài'] : 0.5,
-        'Xỉu': transitionCount['Tài'] > 0 ? transitions['Tài']['Xỉu'] / transitionCount['Tài'] : 0.5
-      },
-      'Xỉu': {
-        'Tài': transitionCount['Xỉu'] > 0 ? transitions['Xỉu']['Tài'] / transitionCount['Xỉu'] : 0.5,
-        'Xỉu': transitionCount['Xỉu'] > 0 ? transitions['Xỉu']['Xỉu'] / transitionCount['Xỉu'] : 0.5
-      }
-    };
-    
-    // Run Markov Chain simulations
-    let taiWins = 0;
-    for (let sim = 0; sim < numSimulations; sim++) {
-      let currentState = results[0];
-      for (let step = 0; step < results.length; step++) {
-        const rand = Math.random();
-        if (rand < transitionProbs[currentState]['Tài']) {
-          currentState = 'Tài';
-        } else {
-          currentState = 'Xỉu';
-        }
-      }
-      if (currentState === 'Tài') taiWins++;
-    }
-    
-    const taiProbability = taiWins / numSimulations;
     const confidence = 50 + Math.abs(taiProbability - 0.5) * 80;
+    const finalConfidence = Math.min(85, Math.max(55, Math.round(confidence)));
     
     return {
       taiProbability: taiProbability.toFixed(4),
       xiuProbability: (1 - taiProbability).toFixed(4),
-      confidence: Math.min(90, Math.round(confidence)),
-      prediction: taiProbability > 0.5 ? 'Tài' : 'Xỉu'
+      confidence: finalConfidence,
+      prediction: taiProbability > 0.5 ? 'Tài' : 'Xỉu',
+      similarPatternsCount: similarPatterns.length,
+      breakProbability: breakProb.toFixed(2),
+      balanceRatio: currentFeatures.balanceRatio.toFixed(2)
     };
   }
 }
 
-// Initialize Monte Carlo simulators
-let monteCarloSimulators = { hu: null, md5: null };
+// ==================== REINFORCEMENT LEARNING ENGINE ====================
+class ReinforcementLearner {
+  constructor() {
+    this.qTable = {};
+    this.learningRate = 0.1;
+    this.discountFactor = 0.95;
+    this.epsilon = 0.2;
+  }
 
-function updateMonteCarloSimulators(type, data) {
-  if (data && data.length >= 30) {
-    monteCarloSimulators[type] = new MonteCarloSimulator(data, 30);
-    console.log(`[MC] Monte Carlo simulator initialized for ${type} with ${data.length} data points`);
+  getStateKey(results, patterns) {
+    if (!results || results.length === 0) return 'default';
+    const last3 = results.slice(0, 3).join('');
+    const streak = this.getStreakLength(results);
+    const recentTrend = results.slice(0, 5).filter(r => r === 'Tài').length;
+    return `${last3}_${streak}_${recentTrend}`;
+  }
+
+  getStreakLength(results) {
+    if (results.length === 0) return 0;
+    let streak = 1;
+    for (let i = 1; i < results.length; i++) {
+      if (results[i] === results[0]) streak++;
+      else break;
+    }
+    return Math.min(streak, 10);
+  }
+
+  getAction(state, possibleActions = ['Tài', 'Xỉu']) {
+    if (!this.qTable[state]) {
+      this.qTable[state] = { Tài: 0.5, Xỉu: 0.5 };
+    }
+    
+    if (Math.random() < this.epsilon) {
+      return possibleActions[Math.floor(Math.random() * possibleActions.length)];
+    }
+    
+    return this.qTable[state].Tài > this.qTable[state].Xỉu ? 'Tài' : 'Xỉu';
+  }
+
+  updateQValue(state, action, reward, nextState) {
+    if (!this.qTable[state]) {
+      this.qTable[state] = { Tài: 0.5, Xỉu: 0.5 };
+    }
+    if (!this.qTable[nextState]) {
+      this.qTable[nextState] = { Tài: 0.5, Xỉu: 0.5 };
+    }
+    
+    const currentQ = this.qTable[state][action];
+    const maxNextQ = Math.max(this.qTable[nextState].Tài, this.qTable[nextState].Xỉu);
+    const newQ = currentQ + this.learningRate * (reward + this.discountFactor * maxNextQ - currentQ);
+    
+    this.qTable[state][action] = newQ;
+    this.qTable[state][action] = Math.max(0, Math.min(1, this.qTable[state][action]));
+  }
+
+  getQLearningPrediction(state) {
+    if (!this.qTable[state]) return null;
+    if (this.qTable[state].Tài > this.qTable[state].Xỉu + 0.1) return 'Tài';
+    if (this.qTable[state].Xỉu > this.qTable[state].Tài + 0.1) return 'Xỉu';
+    return null;
   }
 }
 
+// ==================== LEARNING DATA STRUCTURE ====================
 let learningData = {
   hu: {
     predictions: [],
@@ -312,7 +477,6 @@ let learningData = {
     patternWeights: {},
     lastUpdate: null,
     streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 },
-    adaptiveThresholds: {},
     recentAccuracy: []
   },
   md5: {
@@ -323,425 +487,41 @@ let learningData = {
     patternWeights: {},
     lastUpdate: null,
     streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 },
-    adaptiveThresholds: {},
     recentAccuracy: []
   }
 };
 
 const DEFAULT_PATTERN_WEIGHTS = {
-  'cau_bet': 1.0,
-  'cau_dao_11': 1.0,
-  'cau_22': 1.0,
-  'cau_33': 1.0,
-  'cau_121': 1.0,
-  'cau_123': 1.0,
-  'cau_321': 1.0,
-  'cau_nhay_coc': 1.0,
-  'cau_nhip_nghieng': 1.0,
-  'cau_3van1': 1.0,
-  'cau_be_cau': 1.0,
-  'cau_chu_ky': 1.0,
-  'distribution': 1.0,
-  'dice_pattern': 1.0,
-  'sum_trend': 1.0,
-  'edge_cases': 1.0,
-  'momentum': 1.0,
-  'cau_tu_nhien': 1.0,
-  'dice_trend_line': 1.0,
-  'dice_trend_line_md5': 1.0,
-  'break_pattern_hu': 1.0,
-  'break_pattern_md5': 1.0,
-  'fibonacci': 1.0,
-  'resistance_support': 1.0,
-  'wave': 1.0,
-  'golden_ratio': 1.0,
-  'day_gay': 1.0,
-  'day_gay_md5': 1.0,
-  'cau_44': 1.0,
-  'cau_55': 1.0,
-  'cau_212': 1.0,
-  'cau_1221': 1.0,
-  'cau_2112': 1.0,
-  'cau_gap': 1.0,
-  'cau_ziczac': 1.0,
-  'cau_doi': 1.0,
-  'cau_rong': 1.0,
-  'smart_bet': 1.0,
-  'break_pattern_advanced': 1.0,
-  'break_streak': 1.0,
-  'alternating_break': 1.0,
-  'double_pair_break': 1.0,
-  'triple_pattern': 1.0
+  'cau_bet': 1.0, 'cau_dao_11': 1.0, 'cau_22': 1.0, 'cau_33': 1.0,
+  'cau_121': 1.0, 'cau_123': 1.0, 'cau_321': 1.0, 'cau_nhay_coc': 1.0,
+  'cau_nhip_nghieng': 1.0, 'cau_3van1': 1.0, 'cau_be_cau': 1.0, 'cau_chu_ky': 1.0,
+  'distribution': 1.0, 'dice_pattern': 1.0, 'sum_trend': 1.0, 'edge_cases': 1.0,
+  'momentum': 1.0, 'break_pattern_advanced': 1.0, 'break_streak': 1.0,
+  'alternating_break': 1.0, 'double_pair_break': 1.0, 'triple_pattern': 1.0
 };
 
-function loadLearningData() {
-  try {
-    if (fs.existsSync(LEARNING_FILE)) {
-      const data = fs.readFileSync(LEARNING_FILE, 'utf8');
-      const parsed = JSON.parse(data);
-      learningData = { ...learningData, ...parsed };
-      console.log('Learning data loaded successfully');
-    }
-  } catch (error) {
-    console.error('Error loading learning data:', error.message);
-  }
-}
+let monteCarloSimulators = { hu: null, md5: null };
+let anomalyDetector = new AnomalyDetector();
+let rlLearner = { hu: new ReinforcementLearner(), md5: new ReinforcementLearner() };
 
-function saveLearningData() {
-  try {
-    fs.writeFileSync(LEARNING_FILE, JSON.stringify(learningData, null, 2));
-  } catch (error) {
-    console.error('Error saving learning data:', error.message);
+// ==================== HELPER FUNCTIONS ====================
+function updateMonteCarloSimulators(type, data) {
+  if (data && data.length >= 40) {
+    monteCarloSimulators[type] = new BalancedMonteCarlo(data, 40);
+    console.log(`[MC] Balanced simulator initialized for ${type}`);
   }
-}
-
-function loadPredictionHistory() {
-  try {
-    if (fs.existsSync(HISTORY_FILE)) {
-      const data = fs.readFileSync(HISTORY_FILE, 'utf8');
-      const parsed = JSON.parse(data);
-      predictionHistory = parsed.history || { hu: [], md5: [] };
-      lastProcessedPhien = parsed.lastProcessedPhien || { hu: null, md5: null };
-      console.log('Prediction history loaded successfully');
-    }
-  } catch (error) {
-    console.error('Error loading prediction history:', error.message);
-  }
-}
-
-function savePredictionHistory() {
-  try {
-    const dataToSave = {
-      history: predictionHistory,
-      lastProcessedPhien,
-      lastSaved: new Date().toISOString()
-    };
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(dataToSave, null, 2));
-  } catch (error) {
-    console.error('Error saving prediction history:', error.message);
-  }
-}
-
-async function autoProcessPredictions() {
-  try {
-    const dataHu = await fetchDataHu();
-    if (dataHu && dataHu.length > 0) {
-      updateMonteCarloSimulators('hu', dataHu);
-      const latestHuPhien = dataHu[0].Phien;
-      const nextHuPhien = latestHuPhien + 1;
-      
-      if (lastProcessedPhien.hu !== nextHuPhien) {
-        await verifyPredictions('hu', dataHu);
-        
-        const result = calculateAdvancedPredictionWithMC(dataHu, 'hu');
-        savePredictionToHistory('hu', nextHuPhien, result.prediction, result.confidence);
-        recordPrediction('hu', nextHuPhien, result.prediction, result.confidence, result.factors);
-        
-        lastProcessedPhien.hu = nextHuPhien;
-        console.log(`[Auto][MC] Hu phien ${nextHuPhien}: ${result.prediction} (${result.confidence}%) | MC:${result.monteCarlo?.confidence || 0}%`);
-      }
-    }
-    
-    const dataMd5 = await fetchDataMd5();
-    if (dataMd5 && dataMd5.length > 0) {
-      updateMonteCarloSimulators('md5', dataMd5);
-      const latestMd5Phien = dataMd5[0].Phien;
-      const nextMd5Phien = latestMd5Phien + 1;
-      
-      if (lastProcessedPhien.md5 !== nextMd5Phien) {
-        await verifyPredictions('md5', dataMd5);
-        
-        const result = calculateAdvancedPredictionWithMC(dataMd5, 'md5');
-        savePredictionToHistory('md5', nextMd5Phien, result.prediction, result.confidence);
-        recordPrediction('md5', nextMd5Phien, result.prediction, result.confidence, result.factors);
-        
-        lastProcessedPhien.md5 = nextMd5Phien;
-        console.log(`[Auto][MC] MD5 phien ${nextMd5Phien}: ${result.prediction} (${result.confidence}%) | MC:${result.monteCarlo?.confidence || 0}%`);
-      }
-    }
-    
-    savePredictionHistory();
-    saveLearningData();
-    
-  } catch (error) {
-    console.error('[Auto] Error processing predictions:', error.message);
-  }
-}
-
-function startAutoSaveTask() {
-  console.log(`Auto-save task started (every ${AUTO_SAVE_INTERVAL/1000}s)`);
-  
-  setTimeout(() => {
-    autoProcessPredictions();
-  }, 5000);
-  
-  setInterval(() => {
-    autoProcessPredictions();
-  }, AUTO_SAVE_INTERVAL);
-}
-
-function initializePatternStats(type) {
-  if (!learningData[type].patternWeights || Object.keys(learningData[type].patternWeights).length === 0) {
-    learningData[type].patternWeights = { ...DEFAULT_PATTERN_WEIGHTS };
-  }
-  
-  Object.keys(DEFAULT_PATTERN_WEIGHTS).forEach(pattern => {
-    if (!learningData[type].patternStats[pattern]) {
-      learningData[type].patternStats[pattern] = {
-        total: 0,
-        correct: 0,
-        accuracy: 0.5,
-        recentResults: [],
-        lastAdjustment: null
-      };
-    }
-  });
-}
-
-function getPatternWeight(type, patternId) {
-  initializePatternStats(type);
-  return learningData[type].patternWeights[patternId] || 1.0;
-}
-
-function updatePatternPerformance(type, patternId, isCorrect) {
-  initializePatternStats(type);
-  
-  const stats = learningData[type].patternStats[patternId];
-  if (!stats) return;
-  
-  stats.total++;
-  if (isCorrect) stats.correct++;
-  
-  stats.recentResults.push(isCorrect ? 1 : 0);
-  if (stats.recentResults.length > 20) {
-    stats.recentResults.shift();
-  }
-  
-  const recentAccuracy = stats.recentResults.reduce((a, b) => a + b, 0) / stats.recentResults.length;
-  stats.accuracy = stats.total > 0 ? stats.correct / stats.total : 0.5;
-  
-  const oldWeight = learningData[type].patternWeights[patternId];
-  let newWeight = oldWeight;
-  
-  if (stats.recentResults.length >= 5) {
-    if (recentAccuracy > 0.6) {
-      newWeight = Math.min(2.0, oldWeight * 1.05);
-    } else if (recentAccuracy < 0.4) {
-      newWeight = Math.max(0.3, oldWeight * 0.95);
-    }
-  }
-  
-  learningData[type].patternWeights[patternId] = newWeight;
-  stats.lastAdjustment = new Date().toISOString();
-}
-
-function recordPrediction(type, phien, prediction, confidence, patterns) {
-  const record = {
-    phien: phien.toString(),
-    prediction,
-    confidence,
-    patterns,
-    timestamp: new Date().toISOString(),
-    verified: false,
-    actual: null,
-    isCorrect: null
-  };
-  
-  learningData[type].predictions.unshift(record);
-  learningData[type].totalPredictions++;
-  
-  if (learningData[type].predictions.length > 500) {
-    learningData[type].predictions = learningData[type].predictions.slice(0, 500);
-  }
-  
-  saveLearningData();
-}
-
-async function verifyPredictions(type, currentData) {
-  let updated = false;
-  
-  for (const pred of learningData[type].predictions) {
-    if (pred.verified) continue;
-    
-    const actualResult = currentData.find(d => d.Phien.toString() === pred.phien);
-    if (actualResult) {
-      pred.verified = true;
-      pred.actual = actualResult.Ket_qua;
-      
-      const predictedNormalized = pred.prediction === 'Tài' || pred.prediction === 'tai' ? 'Tài' : 'Xỉu';
-      pred.isCorrect = pred.actual === predictedNormalized;
-      
-      if (pred.isCorrect) {
-        learningData[type].correctPredictions++;
-        learningData[type].streakAnalysis.wins++;
-        
-        if (learningData[type].streakAnalysis.currentStreak >= 0) {
-          learningData[type].streakAnalysis.currentStreak++;
-        } else {
-          learningData[type].streakAnalysis.currentStreak = 1;
-        }
-        
-        if (learningData[type].streakAnalysis.currentStreak > learningData[type].streakAnalysis.bestStreak) {
-          learningData[type].streakAnalysis.bestStreak = learningData[type].streakAnalysis.currentStreak;
-        }
-      } else {
-        learningData[type].streakAnalysis.losses++;
-        
-        if (learningData[type].streakAnalysis.currentStreak <= 0) {
-          learningData[type].streakAnalysis.currentStreak--;
-        } else {
-          learningData[type].streakAnalysis.currentStreak = -1;
-        }
-        
-        if (learningData[type].streakAnalysis.currentStreak < learningData[type].streakAnalysis.worstStreak) {
-          learningData[type].streakAnalysis.worstStreak = learningData[type].streakAnalysis.currentStreak;
-        }
-      }
-      
-      learningData[type].recentAccuracy.push(pred.isCorrect ? 1 : 0);
-      if (learningData[type].recentAccuracy.length > 50) {
-        learningData[type].recentAccuracy.shift();
-      }
-      
-      if (pred.patterns && pred.patterns.length > 0) {
-        pred.patterns.forEach(patternName => {
-          const patternId = getPatternIdFromName(patternName);
-          if (patternId) {
-            updatePatternPerformance(type, patternId, pred.isCorrect);
-          }
-        });
-      }
-      
-      updated = true;
-    }
-  }
-  
-  if (updated) {
-    learningData[type].lastUpdate = new Date().toISOString();
-    saveLearningData();
-  }
-}
-
-function getPatternIdFromName(name) {
-  const mapping = {
-    'Cầu Bệt': 'cau_bet',
-    'Cầu Đảo 1-1': 'cau_dao_11',
-    'Cầu 2-2': 'cau_22',
-    'Cầu 3-3': 'cau_33',
-    'Cầu 4-4': 'cau_44',
-    'Cầu 5-5': 'cau_55',
-    'Cầu 1-2-1': 'cau_121',
-    'Cầu 1-2-3': 'cau_123',
-    'Cầu 3-2-1': 'cau_321',
-    'Cầu 2-1-2': 'cau_212',
-    'Cầu 1-2-2-1': 'cau_1221',
-    'Cầu 1-2-1-2-1': 'cau_1221',
-    'Cầu 2-1-1-2': 'cau_2112',
-    'Cầu Nhảy Cóc': 'cau_nhay_coc',
-    'Cầu Nhịp Nghiêng': 'cau_nhip_nghieng',
-    'Cầu 3 Ván 1': 'cau_3van1',
-    'Cầu Bẻ Cầu': 'cau_be_cau',
-    'Cầu Chu Kỳ': 'cau_chu_ky',
-    'Cầu Gấp': 'cau_gap',
-    'Cầu Ziczac': 'cau_ziczac',
-    'Cầu Đôi': 'cau_doi',
-    'Cầu Rồng': 'cau_rong',
-    'Đảo Xu Hướng': 'smart_bet',
-    'Xu Hướng Cực': 'smart_bet',
-    'Phân bố': 'distribution',
-    'Tổng TB': 'dice_pattern',
-    'Xu hướng': 'sum_trend',
-    'Cực Điểm': 'edge_cases',
-    'Biến động': 'momentum',
-    'Cầu Tự Nhiên': 'cau_tu_nhien',
-    'Biểu Đồ Đường': 'dice_trend_line',
-    'MD5 Biểu Đồ': 'dice_trend_line_md5',
-    'Cầu Liên Tục': 'break_pattern_hu',
-    'MD5 Cầu': 'break_pattern_md5',
-    'Dây Gãy': 'day_gay',
-    'MD5 Dây Gãy': 'day_gay_md5'
-  };
-  
-  for (const [key, value] of Object.entries(mapping)) {
-    if (name.includes(key)) return value;
-  }
-  return null;
-}
-
-function getAdaptiveConfidenceBoost(type) {
-  const recentAcc = learningData[type].recentAccuracy;
-  if (recentAcc.length < 10) return 0;
-  
-  const accuracy = recentAcc.reduce((a, b) => a + b, 0) / recentAcc.length;
-  
-  if (accuracy > 0.65) return 8;
-  if (accuracy > 0.55) return 4;
-  if (accuracy < 0.4) return -8;
-  if (accuracy < 0.45) return -3;
-  
-  return 0;
-}
-
-function getSmartPredictionAdjustment(type, prediction, patterns) {
-  const streakInfo = learningData[type].streakAnalysis;
-  
-  if (streakInfo.currentStreak <= -6) {
-    return prediction === 'Tài' ? 'Xỉu' : 'Tài';
-  }
-  
-  if (streakInfo.currentStreak >= 8) {
-    return prediction === 'Tài' ? 'Xỉu' : 'Tài';
-  }
-  
-  let taiPatternScore = 0;
-  let xiuPatternScore = 0;
-  
-  patterns.forEach(p => {
-    const patternId = getPatternIdFromName(p.name || p);
-    if (patternId) {
-      const stats = learningData[type].patternStats[patternId];
-      if (stats && stats.recentResults.length >= 5) {
-        const recentAcc = stats.recentResults.reduce((a, b) => a + b, 0) / stats.recentResults.length;
-        const weight = learningData[type].patternWeights[patternId] || 1;
-        
-        if (p.prediction === 'Tài') {
-          taiPatternScore += recentAcc * weight;
-        } else {
-          xiuPatternScore += recentAcc * weight;
-        }
-      }
-    }
-  });
-  
-  if (Math.abs(taiPatternScore - xiuPatternScore) > 0.7) {
-    return taiPatternScore > xiuPatternScore ? 'Tài' : 'Xỉu';
-  }
-  
-  return prediction;
-}
-
-function normalizeResult(result) {
-  if (result === 'Tài' || result === 'tài') return 'tai';
-  if (result === 'Xỉu' || result === 'xỉu') return 'xiu';
-  return result.toLowerCase();
 }
 
 function transformApiData(apiData) {
-  if (!apiData || !apiData.list || !Array.isArray(apiData.list)) {
-    return null;
-  }
-  
-  return apiData.list.map(item => {
-    const result = item.resultTruyenThong === 'TAI' ? 'Tài' : 'Xỉu';
-    return {
-      Phien: item.id,
-      Ket_qua: result,
-      Xuc_xac_1: item.dices[0],
-      Xuc_xac_2: item.dices[1],
-      Xuc_xac_3: item.dices[2],
-      Tong: item.point
-    };
-  });
+  if (!apiData || !apiData.list || !Array.isArray(apiData.list)) return null;
+  return apiData.list.map(item => ({
+    Phien: item.id,
+    Ket_qua: item.resultTruyenThong === 'TAI' ? 'Tài' : 'Xỉu',
+    Xuc_xac_1: item.dices[0],
+    Xuc_xac_2: item.dices[1],
+    Xuc_xac_3: item.dices[2],
+    Tong: item.point
+  }));
 }
 
 async function fetchDataHu() {
@@ -764,2365 +544,10 @@ async function fetchDataMd5() {
   }
 }
 
-// ==================== CẦU PATTERN ANALYSIS FUNCTIONS ====================
-
-function analyzeCauBet(results, type) {
-  if (results.length < 3) return { detected: false };
-  
-  let streakType = results[0];
-  let streakLength = 1;
-  
-  for (let i = 1; i < results.length; i++) {
-    if (results[i] === streakType) {
-      streakLength++;
-    } else {
-      break;
-    }
-  }
-  
-  if (streakLength >= 3) {
-    const weight = getPatternWeight(type, 'cau_bet');
-    const stats = learningData[type].patternStats['cau_bet'];
-    
-    let shouldBreak = streakLength >= 5;
-    
-    if (stats && stats.recentResults.length >= 5) {
-      const recentAcc = stats.recentResults.reduce((a, b) => a + b, 0) / stats.recentResults.length;
-      if (recentAcc < 0.4) {
-        shouldBreak = !shouldBreak;
-      }
-    }
-    
-    return { 
-      detected: true, 
-      type: streakType, 
-      length: streakLength,
-      prediction: shouldBreak ? (streakType === 'Tài' ? 'Xỉu' : 'Tài') : streakType,
-      confidence: Math.round((shouldBreak ? Math.min(12, streakLength * 2) : Math.min(15, streakLength * 3)) * weight),
-      name: `Cầu Bệt ${streakLength} phiên`,
-      patternId: 'cau_bet'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCauDao11(results, type) {
-  if (results.length < 4) return { detected: false };
-  
-  let alternatingLength = 1;
-  for (let i = 1; i < Math.min(results.length, 10); i++) {
-    if (results[i] !== results[i - 1]) {
-      alternatingLength++;
-    } else {
-      break;
-    }
-  }
-  
-  if (alternatingLength >= 4) {
-    const weight = getPatternWeight(type, 'cau_dao_11');
-    return { 
-      detected: true, 
-      length: alternatingLength,
-      prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài',
-      confidence: Math.round(Math.min(14, alternatingLength * 2 + 4) * weight),
-      name: `Cầu Đảo 1-1 (${alternatingLength} phiên)`,
-      patternId: 'cau_dao_11'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCau22(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  let pairCount = 0;
-  let i = 0;
-  let pattern = [];
-  
-  while (i < results.length - 1 && pairCount < 4) {
-    if (results[i] === results[i + 1]) {
-      pattern.push(results[i]);
-      pairCount++;
-      i += 2;
-    } else {
-      break;
-    }
-  }
-  
-  if (pairCount >= 2) {
-    let isAlternating = true;
-    for (let j = 1; j < pattern.length; j++) {
-      if (pattern[j] === pattern[j - 1]) {
-        isAlternating = false;
-        break;
-      }
-    }
-    
-    if (isAlternating) {
-      const lastPairType = pattern[pattern.length - 1];
-      const weight = getPatternWeight(type, 'cau_22');
-      
-      return { 
-        detected: true, 
-        pairCount,
-        prediction: lastPairType === 'Tài' ? 'Xỉu' : 'Tài',
-        confidence: Math.round(Math.min(12, pairCount * 3 + 3) * weight),
-        name: `Cầu 2-2 (${pairCount} cặp)`,
-        patternId: 'cau_22'
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCau33(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  let tripleCount = 0;
-  let i = 0;
-  let pattern = [];
-  
-  while (i < results.length - 2) {
-    if (results[i] === results[i + 1] && results[i + 1] === results[i + 2]) {
-      pattern.push(results[i]);
-      tripleCount++;
-      i += 3;
-    } else {
-      break;
-    }
-  }
-  
-  if (tripleCount >= 1) {
-    const currentPosition = results.length % 3;
-    const lastTripleType = pattern[pattern.length - 1];
-    const weight = getPatternWeight(type, 'cau_33');
-    
-    let prediction;
-    if (currentPosition === 0) {
-      prediction = lastTripleType === 'Tài' ? 'Xỉu' : 'Tài';
-    } else {
-      prediction = lastTripleType;
-    }
-    
-    return { 
-      detected: true, 
-      tripleCount,
-      prediction,
-      confidence: Math.round(Math.min(13, tripleCount * 4 + 5) * weight),
-      name: `Cầu 3-3 (${tripleCount} bộ ba)`,
-      patternId: 'cau_33'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCau121(results, type) {
-  if (results.length < 4) return { detected: false };
-  
-  const pattern1 = results.slice(0, 4);
-  
-  if (pattern1[0] !== pattern1[1] && 
-      pattern1[1] === pattern1[2] && 
-      pattern1[2] !== pattern1[3] &&
-      pattern1[0] === pattern1[3]) {
-    const weight = getPatternWeight(type, 'cau_121');
-    return { 
-      detected: true, 
-      pattern: '1-2-1',
-      prediction: pattern1[0],
-      confidence: Math.round(10 * weight),
-      name: 'Cầu 1-2-1',
-      patternId: 'cau_121'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCau123(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  const first = results[5];
-  const nextTwo = results.slice(3, 5);
-  const lastThree = results.slice(0, 3);
-  
-  if (nextTwo[0] === nextTwo[1] && nextTwo[0] !== first) {
-    const allSame = lastThree.every(r => r === lastThree[0]);
-    if (allSame && lastThree[0] !== nextTwo[0]) {
-      const weight = getPatternWeight(type, 'cau_123');
-      return { 
-        detected: true, 
-        pattern: '1-2-3',
-        prediction: first,
-        confidence: Math.round(11 * weight),
-        name: 'Cầu 1-2-3',
-        patternId: 'cau_123'
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCau321(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  const first3 = results.slice(3, 6);
-  const next2 = results.slice(1, 3);
-  const last1 = results[0];
-  
-  const first3Same = first3.every(r => r === first3[0]);
-  const next2Same = next2.every(r => r === next2[0]);
-  
-  if (first3Same && next2Same && first3[0] !== next2[0] && last1 !== next2[0]) {
-    const weight = getPatternWeight(type, 'cau_321');
-    return { 
-      detected: true, 
-      pattern: '3-2-1',
-      prediction: next2[0],
-      confidence: Math.round(12 * weight),
-      name: 'Cầu 3-2-1',
-      patternId: 'cau_321'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCauNhayCoc(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  const skipPattern = [];
-  for (let i = 0; i < Math.min(results.length, 12); i += 2) {
-    skipPattern.push(results[i]);
-  }
-  
-  if (skipPattern.length >= 3) {
-    const weight = getPatternWeight(type, 'cau_nhay_coc');
-    const allSame = skipPattern.slice(0, 3).every(r => r === skipPattern[0]);
-    if (allSame) {
-      return { 
-        detected: true, 
-        pattern: skipPattern.slice(0, 3),
-        prediction: skipPattern[0],
-        confidence: Math.round(8 * weight),
-        name: 'Cầu Nhảy Cóc',
-        patternId: 'cau_nhay_coc'
-      };
-    }
-    
-    let alternating = true;
-    for (let i = 1; i < skipPattern.length - 1; i++) {
-      if (skipPattern[i] === skipPattern[i - 1]) {
-        alternating = false;
-        break;
-      }
-    }
-    
-    if (alternating && skipPattern.length >= 3) {
-      return { 
-        detected: true, 
-        pattern: skipPattern.slice(0, 3),
-        prediction: skipPattern[0] === 'Tài' ? 'Xỉu' : 'Tài',
-        confidence: Math.round(7 * weight),
-        name: 'Cầu Nhảy Cóc Đảo',
-        patternId: 'cau_nhay_coc'
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCauNhipNghieng(results, type) {
-  if (results.length < 5) return { detected: false };
-  
-  const last5 = results.slice(0, 5);
-  const taiCount5 = last5.filter(r => r === 'Tài').length;
-  const weight = getPatternWeight(type, 'cau_nhip_nghieng');
-  
-  if (taiCount5 >= 4) {
-    return { 
-      detected: true, 
-      type: 'nghieng_5',
-      ratio: `${taiCount5}/5 Tài`,
-      prediction: 'Tài',
-      confidence: Math.round(9 * weight),
-      name: `Cầu Nhịp Nghiêng 5 (${taiCount5} Tài)`,
-      patternId: 'cau_nhip_nghieng'
-    };
-  } else if (taiCount5 <= 1) {
-    return { 
-      detected: true, 
-      type: 'nghieng_5',
-      ratio: `${5 - taiCount5}/5 Xỉu`,
-      prediction: 'Xỉu',
-      confidence: Math.round(9 * weight),
-      name: `Cầu Nhịp Nghiêng 5 (${5 - taiCount5} Xỉu)`,
-      patternId: 'cau_nhip_nghieng'
-    };
-  }
-  
-  if (results.length >= 7) {
-    const last7 = results.slice(0, 7);
-    const taiCount7 = last7.filter(r => r === 'Tài').length;
-    
-    if (taiCount7 >= 5) {
-      return { 
-        detected: true, 
-        type: 'nghieng_7',
-        ratio: `${taiCount7}/7 Tài`,
-        prediction: 'Tài',
-        confidence: Math.round(10 * weight),
-        name: `Cầu Nhịp Nghiêng 7 (${taiCount7} Tài)`,
-        patternId: 'cau_nhip_nghieng'
-      };
-    } else if (taiCount7 <= 2) {
-      return { 
-        detected: true, 
-        type: 'nghieng_7',
-        ratio: `${7 - taiCount7}/7 Xỉu`,
-        prediction: 'Xỉu',
-        confidence: Math.round(10 * weight),
-        name: `Cầu Nhịp Nghiêng 7 (${7 - taiCount7} Xỉu)`,
-        patternId: 'cau_nhip_nghieng'
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCau3Van1(results, type) {
-  if (results.length < 4) return { detected: false };
-  
-  const last4 = results.slice(0, 4);
-  const taiCount = last4.filter(r => r === 'Tài').length;
-  const weight = getPatternWeight(type, 'cau_3van1');
-  
-  if (taiCount === 3) {
-    return { 
-      detected: true, 
-      pattern: '3-1',
-      majority: 'Tài',
-      prediction: 'Xỉu',
-      confidence: Math.round(8 * weight),
-      name: 'Cầu 3 Ván 1 (3T-1X)',
-      patternId: 'cau_3van1'
-    };
-  } else if (taiCount === 1) {
-    return { 
-      detected: true, 
-      pattern: '3-1',
-      majority: 'Xỉu',
-      prediction: 'Tài',
-      confidence: Math.round(8 * weight),
-      name: 'Cầu 3 Ván 1 (3X-1T)',
-      patternId: 'cau_3van1'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCauBeCau(results, type) {
-  if (results.length < 8) return { detected: false };
-  
-  const recentStreak = analyzeCauBet(results, type);
-  
-  if (recentStreak.detected && recentStreak.length >= 4) {
-    const beforeStreak = results.slice(recentStreak.length, recentStreak.length + 4);
-    const previousPattern = analyzeCauBet(beforeStreak, type);
-    
-    if (previousPattern.detected && previousPattern.type !== recentStreak.type) {
-      const weight = getPatternWeight(type, 'cau_be_cau');
-      return { 
-        detected: true, 
-        pattern: 'be_cau',
-        prediction: recentStreak.type === 'Tài' ? 'Xỉu' : 'Tài',
-        confidence: Math.round(11 * weight),
-        name: 'Cầu Bẻ Cầu',
-        patternId: 'cau_be_cau'
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCauTuNhien(results, type) {
-  if (results.length < 2) return { detected: false };
-  const weight = getPatternWeight(type, 'cau_tu_nhien');
-  
-  return { 
-    detected: true, 
-    prediction: results[0],
-    confidence: Math.round(5 * weight),
-    name: 'Cầu Tự Nhiên (Theo Ván Trước)',
-    patternId: 'cau_tu_nhien'
-  };
-}
-
-function analyzeCau44(results, type) {
-  if (results.length < 8) return { detected: false };
-  
-  let quadCount = 0;
-  let i = 0;
-  let pattern = [];
-  
-  while (i < results.length - 3) {
-    if (results[i] === results[i + 1] && 
-        results[i + 1] === results[i + 2] && 
-        results[i + 2] === results[i + 3]) {
-      pattern.push(results[i]);
-      quadCount++;
-      i += 4;
-    } else {
-      break;
-    }
-  }
-  
-  if (quadCount >= 1) {
-    const currentPosition = (results.length - (quadCount * 4));
-    const lastQuadType = pattern[pattern.length - 1];
-    const weight = getPatternWeight(type, 'cau_44');
-    
-    let prediction;
-    if (currentPosition >= 3) {
-      prediction = lastQuadType === 'Tài' ? 'Xỉu' : 'Tài';
-    } else {
-      prediction = lastQuadType;
-    }
-    
-    return { 
-      detected: true, 
-      quadCount,
-      prediction,
-      confidence: Math.round(Math.min(14, quadCount * 4 + 6) * weight),
-      name: `Cầu 4-4 (${quadCount} bộ bốn)`,
-      patternId: 'cau_44'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCau212(results, type) {
-  if (results.length < 5) return { detected: false };
-  
-  const pattern = results.slice(0, 5);
-  const weight = getPatternWeight(type, 'cau_212');
-  
-  if (pattern[0] === pattern[1] && 
-      pattern[1] !== pattern[2] &&
-      pattern[2] === pattern[3] && pattern[3] === pattern[4] &&
-      pattern[0] !== pattern[2]) {
-    return { 
-      detected: true, 
-      pattern: '2-1-2',
-      prediction: pattern[0],
-      confidence: Math.round(11 * weight),
-      name: 'Cầu 2-1-2',
-      patternId: 'cau_212'
-    };
-  }
-  
-  if (pattern[0] !== pattern[1] && pattern[1] !== pattern[2] &&
-      pattern[0] === pattern[2] &&
-      pattern[2] !== pattern[3] &&
-      pattern[3] === pattern[4]) {
-    return { 
-      detected: true, 
-      pattern: '2-1-2 (đảo)',
-      prediction: pattern[0] === 'Tài' ? 'Xỉu' : 'Tài',
-      confidence: Math.round(10 * weight),
-      name: 'Cầu 2-1-2 Đảo',
-      patternId: 'cau_212'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCau1221(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  const pattern = results.slice(0, 6);
-  const weight = getPatternWeight(type, 'cau_1221');
-  
-  if (pattern[0] !== pattern[1] &&
-      pattern[1] === pattern[2] &&
-      pattern[2] === pattern[3] &&
-      pattern[3] !== pattern[4] &&
-      pattern[4] === pattern[5] &&
-      pattern[0] !== pattern[1]) {
-    return { 
-      detected: true, 
-      pattern: '1-2-2-1',
-      prediction: pattern[0],
-      confidence: Math.round(12 * weight),
-      name: 'Cầu 1-2-2-1',
-      patternId: 'cau_1221'
-    };
-  }
-  
-  if (pattern[0] !== pattern[1] &&
-      pattern[1] === pattern[2] &&
-      pattern[2] !== pattern[3] &&
-      pattern[3] === pattern[4] &&
-      pattern[4] !== pattern[5]) {
-    return { 
-      detected: true, 
-      pattern: '1-2-1-2-1',
-      prediction: pattern[0] === 'Tài' ? 'Xỉu' : 'Tài',
-      confidence: Math.round(11 * weight),
-      name: 'Cầu 1-2-1-2-1',
-      patternId: 'cau_1221'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCau55(results, type) {
-  if (results.length < 10) return { detected: false };
-  
-  let quintCount = 0;
-  let i = 0;
-  let pattern = [];
-  
-  while (i < results.length - 4) {
-    if (results[i] === results[i + 1] && 
-        results[i + 1] === results[i + 2] && 
-        results[i + 2] === results[i + 3] &&
-        results[i + 3] === results[i + 4]) {
-      pattern.push(results[i]);
-      quintCount++;
-      i += 5;
-    } else {
-      break;
-    }
-  }
-  
-  if (quintCount >= 1) {
-    const currentPosition = (results.length - (quintCount * 5));
-    const lastQuintType = pattern[pattern.length - 1];
-    const weight = getPatternWeight(type, 'cau_55');
-    
-    let prediction;
-    if (currentPosition >= 4) {
-      prediction = lastQuintType === 'Tài' ? 'Xỉu' : 'Tài';
-    } else {
-      prediction = lastQuintType;
-    }
-    
-    return { 
-      detected: true, 
-      quintCount,
-      prediction,
-      confidence: Math.round(Math.min(15, quintCount * 5 + 7) * weight),
-      name: `Cầu 5-5 (${quintCount} bộ năm)`,
-      patternId: 'cau_55'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCau2112(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  const pattern = results.slice(0, 6);
-  const weight = getPatternWeight(type, 'cau_2112');
-  
-  if (pattern[0] === pattern[1] &&
-      pattern[1] !== pattern[2] &&
-      pattern[2] === pattern[3] &&
-      pattern[3] !== pattern[4] &&
-      pattern[4] === pattern[5] &&
-      pattern[0] !== pattern[2]) {
-    return { 
-      detected: true, 
-      pattern: '2-1-1-2',
-      prediction: pattern[0],
-      confidence: Math.round(11 * weight),
-      name: 'Cầu 2-1-1-2',
-      patternId: 'cau_2112'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCauGap(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'cau_gap');
-  
-  for (let gapSize = 2; gapSize <= 3; gapSize++) {
-    let patternFound = true;
-    const referenceType = results[0];
-    
-    for (let i = 0; i < Math.min(results.length, 12); i += (gapSize + 1)) {
-      if (results[i] !== referenceType) {
-        patternFound = false;
-        break;
-      }
-    }
-    
-    if (patternFound) {
-      return { 
-        detected: true, 
-        gapSize,
-        prediction: referenceType,
-        confidence: Math.round(9 * weight),
-        name: `Cầu Gấp ${gapSize + 1} (mỗi ${gapSize + 1} phiên)`,
-        patternId: 'cau_gap'
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCauZiczac(results, type) {
-  if (results.length < 8) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'cau_ziczac');
-  
-  let zigzagCount = 0;
-  for (let i = 0; i < results.length - 2; i++) {
-    if (results[i] !== results[i + 1] && results[i + 1] !== results[i + 2] && results[i] === results[i + 2]) {
-      zigzagCount++;
-    } else {
-      break;
-    }
-  }
-  
-  if (zigzagCount >= 3) {
-    return { 
-      detected: true, 
-      zigzagCount,
-      prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài',
-      confidence: Math.round(Math.min(13, zigzagCount * 2 + 5) * weight),
-      name: `Cầu Ziczac (${zigzagCount} lần)`,
-      patternId: 'cau_ziczac'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCauDoi(results, type) {
-  if (results.length < 4) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'cau_doi');
-  
-  let pairChanges = 0;
-  let i = 0;
-  
-  while (i < results.length - 1) {
-    if (results[i] === results[i + 1]) {
-      pairChanges++;
-      i += 2;
-    } else {
-      break;
-    }
-  }
-  
-  if (pairChanges >= 2) {
-    const isAlternatingPairs = results[0] !== results[2];
-    if (isAlternatingPairs) {
-      return { 
-        detected: true, 
-        pairChanges,
-        prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài',
-        confidence: Math.round(Math.min(12, pairChanges * 3 + 4) * weight),
-        name: `Cầu Đôi Đảo (${pairChanges} cặp)`,
-        patternId: 'cau_doi'
-      };
-    } else {
-      return { 
-        detected: true, 
-        pairChanges,
-        prediction: results[0],
-        confidence: Math.round(Math.min(11, pairChanges * 2 + 5) * weight),
-        name: `Cầu Đôi Bệt (${pairChanges} cặp)`,
-        patternId: 'cau_doi'
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeCauRong(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'cau_rong');
-  
-  let streakLength = 1;
-  for (let i = 1; i < results.length; i++) {
-    if (results[i] === results[0]) {
-      streakLength++;
-    } else {
-      break;
-    }
-  }
-  
-  if (streakLength >= 6) {
-    return { 
-      detected: true, 
-      streakLength,
-      prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài',
-      confidence: Math.round(Math.min(16, streakLength + 8) * weight),
-      name: `Cầu Rồng ${streakLength} phiên (Bẻ mạnh)`,
-      patternId: 'cau_rong'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeSmartBet(results, type) {
-  if (results.length < 10) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'smart_bet');
-  const last10 = results.slice(0, 10);
-  const last5 = results.slice(0, 5);
-  const prev5 = results.slice(5, 10);
-  
-  const taiLast5 = last5.filter(r => r === 'Tài').length;
-  const taiPrev5 = prev5.filter(r => r === 'Tài').length;
-  
-  const trendChanging = (taiLast5 >= 4 && taiPrev5 <= 1) || (taiLast5 <= 1 && taiPrev5 >= 4);
-  
-  if (trendChanging) {
-    const currentDominant = taiLast5 >= 4 ? 'Tài' : 'Xỉu';
-    return { 
-      detected: true, 
-      trendChange: true,
-      prediction: currentDominant === 'Tài' ? 'Xỉu' : 'Tài',
-      confidence: Math.round(13 * weight),
-      name: `Đảo Xu Hướng (${taiLast5}T-${5 - taiLast5}X → ${taiPrev5}T-${5 - taiPrev5}X)`,
-      patternId: 'smart_bet'
-    };
-  }
-  
-  const taiLast10 = last10.filter(r => r === 'Tài').length;
-  if (taiLast10 >= 8 || taiLast10 <= 2) {
-    const dominant = taiLast10 >= 8 ? 'Tài' : 'Xỉu';
-    return { 
-      detected: true, 
-      extreme: true,
-      prediction: dominant === 'Tài' ? 'Xỉu' : 'Tài',
-      confidence: Math.round(12 * weight),
-      name: `Xu Hướng Cực (${taiLast10}T-${10 - taiLast10}X trong 10 phiên)`,
-      patternId: 'smart_bet'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeDistribution(data, type, windowSize = 50) {
-  const window = data.slice(0, windowSize);
-  const taiCount = window.filter(d => d.Ket_qua === 'Tài').length;
-  const xiuCount = window.length - taiCount;
-  
-  return {
-    taiPercent: (taiCount / window.length) * 100,
-    xiuPercent: (xiuCount / window.length) * 100,
-    taiCount,
-    xiuCount,
-    total: window.length,
-    imbalance: Math.abs(taiCount - xiuCount) / window.length
-  };
-}
-
-function analyzeDicePatterns(data) {
-  const recentData = data.slice(0, 15);
-  
-  let highDiceCount = 0;
-  let lowDiceCount = 0;
-  let totalSum = 0;
-  let sumVariance = [];
-  
-  recentData.forEach(d => {
-    const dices = [d.Xuc_xac_1, d.Xuc_xac_2, d.Xuc_xac_3];
-    dices.forEach(dice => {
-      if (dice >= 4) highDiceCount++;
-      else lowDiceCount++;
-    });
-    totalSum += d.Tong;
-    sumVariance.push(d.Tong);
-  });
-  
-  const avgSum = totalSum / recentData.length;
-  const variance = sumVariance.reduce((acc, val) => acc + Math.pow(val - avgSum, 2), 0) / sumVariance.length;
-  const stdDev = Math.sqrt(variance);
-  
-  return {
-    highDiceRatio: highDiceCount / (highDiceCount + lowDiceCount),
-    lowDiceRatio: lowDiceCount / (highDiceCount + lowDiceCount),
-    averageSum: avgSum,
-    standardDeviation: stdDev,
-    sumTrend: avgSum > 10.5 ? 'high' : 'low',
-    isStable: stdDev < 3
-  };
-}
-
-function analyzeSumTrend(data) {
-  const recentSums = data.slice(0, 20).map(d => d.Tong);
-  
-  let increasingCount = 0;
-  let decreasingCount = 0;
-  
-  for (let i = 0; i < recentSums.length - 1; i++) {
-    if (recentSums[i] > recentSums[i + 1]) decreasingCount++;
-    else if (recentSums[i] < recentSums[i + 1]) increasingCount++;
-  }
-  
-  const movingAvg5 = recentSums.slice(0, 5).reduce((a, b) => a + b, 0) / 5;
-  const movingAvg10 = recentSums.slice(0, 10).reduce((a, b) => a + b, 0) / 10;
-  
-  return {
-    trend: increasingCount > decreasingCount ? 'increasing' : 'decreasing',
-    strength: Math.abs(increasingCount - decreasingCount) / (recentSums.length - 1),
-    movingAvg5,
-    movingAvg10,
-    shortTermBias: movingAvg5 > 10.5 ? 'Tài' : 'Xỉu'
-  };
-}
-
-function analyzeRecentMomentum(results) {
-  const windows = [3, 5, 10, 15];
-  const momentum = {};
-  
-  windows.forEach(size => {
-    if (results.length >= size) {
-      const window = results.slice(0, size);
-      const taiCount = window.filter(r => r === 'Tài').length;
-      momentum[`window_${size}`] = {
-        taiRatio: taiCount / size,
-        xiuRatio: (size - taiCount) / size,
-        dominant: taiCount > size / 2 ? 'Tài' : 'Xỉu'
-      };
-    }
-  });
-  
-  return momentum;
-}
-
-function detectCyclePattern(results, type) {
-  if (results.length < 12) return { detected: false };
-  
-  for (let cycleLength = 2; cycleLength <= 6; cycleLength++) {
-    let isRepeating = true;
-    const pattern = results.slice(0, cycleLength);
-    
-    for (let i = cycleLength; i < Math.min(cycleLength * 3, results.length); i++) {
-      if (results[i] !== pattern[i % cycleLength]) {
-        isRepeating = false;
-        break;
-      }
-    }
-    
-    if (isRepeating) {
-      const nextPosition = results.length % cycleLength;
-      const weight = getPatternWeight(type, 'cau_chu_ky');
-      return { 
-        detected: true, 
-        cycleLength,
-        pattern,
-        prediction: pattern[nextPosition],
-        confidence: Math.round(9 * weight),
-        name: `Cầu Chu Kỳ ${cycleLength}`,
-        patternId: 'cau_chu_ky'
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeEdgeCases(data, type) {
-  if (data.length < 10) return { detected: false };
-  
-  const recentTotals = data.slice(0, 10).map(d => d.Tong);
-  
-  const extremeHighCount = recentTotals.filter(t => t >= 14).length;
-  const extremeLowCount = recentTotals.filter(t => t <= 7).length;
-  const weight = getPatternWeight(type, 'edge_cases');
-  
-  if (extremeHighCount >= 4) {
-    return { 
-      detected: true, 
-      type: 'extreme_high',
-      prediction: 'Xỉu',
-      confidence: Math.round(7 * weight),
-      name: `Cực Điểm Cao (${extremeHighCount} phiên >= 14)`,
-      patternId: 'edge_cases'
-    };
-  }
-  
-  if (extremeLowCount >= 4) {
-    return { 
-      detected: true, 
-      type: 'extreme_low',
-      prediction: 'Tài',
-      confidence: Math.round(7 * weight),
-      name: `Cực Điểm Thấp (${extremeLowCount} phiên <= 7)`,
-      patternId: 'edge_cases'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeDiceTrendLineHu(data, type) {
-  if (data.length < 3) return { detected: false };
-  
-  const current = data[0];
-  const previous = data[1];
-  
-  const currentDices = [current.Xuc_xac_1, current.Xuc_xac_2, current.Xuc_xac_3];
-  const previousDices = [previous.Xuc_xac_1, previous.Xuc_xac_2, previous.Xuc_xac_3];
-  
-  const directions = [];
-  for (let i = 0; i < 3; i++) {
-    if (currentDices[i] > previousDices[i]) {
-      directions.push('up');
-    } else if (currentDices[i] < previousDices[i]) {
-      directions.push('down');
-    } else {
-      directions.push('same');
-    }
-  }
-  
-  const upCount = directions.filter(d => d === 'up').length;
-  const downCount = directions.filter(d => d === 'down').length;
-  const sameCount = directions.filter(d => d === 'same').length;
-  
-  const previousResult = previous.Ket_qua;
-  const weight = getPatternWeight(type, 'dice_trend_line');
-  
-  const allSameDice = currentDices[0] === currentDices[1] && currentDices[1] === currentDices[2];
-  if (allSameDice) {
-    const prediction = currentDices[0] >= 4 ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'same_dice',
-      prediction,
-      confidence: Math.round(13 * weight),
-      name: `Biểu Đồ Đường (3 xúc xắc giống ${currentDices[0]})`,
-      patternId: 'dice_trend_line',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  const twoSameDice = (currentDices[0] === currentDices[1]) || 
-                       (currentDices[1] === currentDices[2]) || 
-                       (currentDices[0] === currentDices[2]);
-  if (twoSameDice) {
-    const prediction = previousResult === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'two_same_dice',
-      prediction,
-      confidence: Math.round(11 * weight),
-      name: `Biểu Đồ Đường (2 xúc xắc giống - Bẻ ${previousResult})`,
-      patternId: 'dice_trend_line',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  const maxDice = Math.max(...currentDices);
-  const minDice = Math.min(...currentDices);
-  if (maxDice === 6 && minDice === 1) {
-    const prediction = previousResult === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'extreme_range',
-      prediction,
-      confidence: Math.round(12 * weight),
-      name: `Biểu Đồ Đường (Biên độ max 6-1 - Bẻ)`,
-      patternId: 'dice_trend_line',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, maxDice, minDice, directions }
-    };
-  }
-  
-  if (upCount === 1 && downCount === 2) {
-    return {
-      detected: true,
-      type: 'trend_1up_2down',
-      prediction: 'Tài',
-      confidence: Math.round(12 * weight),
-      name: `Biểu Đồ Đường (1 lên 2 xuống → Tài)`,
-      patternId: 'dice_trend_line',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  if (upCount === 2 && downCount === 1) {
-    return {
-      detected: true,
-      type: 'trend_2up_1down',
-      prediction: 'Xỉu',
-      confidence: Math.round(12 * weight),
-      name: `Biểu Đồ Đường (2 lên 1 xuống → Xỉu)`,
-      patternId: 'dice_trend_line',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  if (upCount === 3 || downCount === 3) {
-    const prediction = previousResult;
-    return {
-      detected: true,
-      type: 'all_same_direction',
-      prediction,
-      confidence: Math.round(10 * weight),
-      name: `Biểu Đồ Đường (3 dây cùng ${upCount === 3 ? 'lên' : 'xuống'} → Theo ${previousResult})`,
-      patternId: 'dice_trend_line',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  const twoSameDirection = (upCount === 2 && sameCount === 1) || 
-                           (downCount === 2 && sameCount === 1) ||
-                           (sameCount === 2 && (upCount === 1 || downCount === 1));
-  if (twoSameDirection) {
-    const prediction = previousResult === 'Tài' ? 'Xỉu' : 'Tài';
-    const directionDesc = sameCount === 2 ? '2 dây ngang' : 
-                         (upCount === 2 ? '2 dây lên' : '2 dây xuống');
-    return {
-      detected: true,
-      type: 'two_same_direction',
-      prediction,
-      confidence: Math.round(10 * weight),
-      name: `Biểu Đồ Đường (${directionDesc} → Bẻ ${previousResult})`,
-      patternId: 'dice_trend_line',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeDiceTrendLineMd5(data, type) {
-  if (data.length < 3) return { detected: false };
-  
-  const current = data[0];
-  const previous = data[1];
-  const beforePrevious = data[2];
-  
-  const currentDices = [current.Xuc_xac_1, current.Xuc_xac_2, current.Xuc_xac_3];
-  const previousDices = [previous.Xuc_xac_1, previous.Xuc_xac_2, previous.Xuc_xac_3];
-  const beforePrevDices = [beforePrevious.Xuc_xac_1, beforePrevious.Xuc_xac_2, beforePrevious.Xuc_xac_3];
-  
-  const directions = [];
-  for (let i = 0; i < 3; i++) {
-    if (currentDices[i] > previousDices[i]) {
-      directions.push('up');
-    } else if (currentDices[i] < previousDices[i]) {
-      directions.push('down');
-    } else {
-      directions.push('same');
-    }
-  }
-  
-  const upCount = directions.filter(d => d === 'up').length;
-  const downCount = directions.filter(d => d === 'down').length;
-  const sameCount = directions.filter(d => d === 'same').length;
-  
-  const previousResult = previous.Ket_qua;
-  const weight = getPatternWeight(type, 'dice_trend_line_md5');
-  
-  const sortedDices = [...currentDices].sort((a, b) => b - a);
-  if (sortedDices[0] === sortedDices[1] && sortedDices[0] >= 5) {
-    const prediction = 'Xỉu';
-    return {
-      detected: true,
-      type: 'double_high',
-      prediction,
-      confidence: Math.round(13 * weight),
-      name: `MD5 Biểu Đồ (2 xúc xắc cao ${sortedDices[0]}-${sortedDices[1]} → Xỉu)`,
-      patternId: 'dice_trend_line_md5',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  if (sortedDices[1] === sortedDices[2] && sortedDices[1] <= 2) {
-    const prediction = 'Tài';
-    return {
-      detected: true,
-      type: 'double_low',
-      prediction,
-      confidence: Math.round(13 * weight),
-      name: `MD5 Biểu Đồ (2 xúc xắc thấp ${sortedDices[1]}-${sortedDices[2]} → Tài)`,
-      patternId: 'dice_trend_line_md5',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  const sumCurrent = currentDices.reduce((a, b) => a + b, 0);
-  const sumPrevious = previousDices.reduce((a, b) => a + b, 0);
-  const sumBeforePrev = beforePrevDices.reduce((a, b) => a + b, 0);
-  
-  const sumTrendUp = sumCurrent > sumPrevious && sumPrevious > sumBeforePrev;
-  const sumTrendDown = sumCurrent < sumPrevious && sumPrevious < sumBeforePrev;
-  
-  if (sumTrendUp || sumTrendDown) {
-    const prediction = sumTrendUp ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'sum_trend_break',
-      prediction,
-      confidence: Math.round(12 * weight),
-      name: `MD5 Biểu Đồ (Tổng ${sumTrendUp ? 'tăng' : 'giảm'} liên tục → Bẻ)`,
-      patternId: 'dice_trend_line_md5',
-      analysis: { sumCurrent, sumPrevious, sumBeforePrev, directions }
-    };
-  }
-  
-  if (upCount === 1 && downCount === 2) {
-    return {
-      detected: true,
-      type: 'trend_1up_2down',
-      prediction: 'Tài',
-      confidence: Math.round(11 * weight),
-      name: `MD5 Biểu Đồ (1 lên 2 xuống → Tài)`,
-      patternId: 'dice_trend_line_md5',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  if (upCount === 2 && downCount === 1) {
-    return {
-      detected: true,
-      type: 'trend_2up_1down',
-      prediction: 'Xỉu',
-      confidence: Math.round(11 * weight),
-      name: `MD5 Biểu Đồ (2 lên 1 xuống → Xỉu)`,
-      patternId: 'dice_trend_line_md5',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  if (upCount === 3 || downCount === 3) {
-    const prediction = previousResult;
-    return {
-      detected: true,
-      type: 'all_same_direction',
-      prediction,
-      confidence: Math.round(9 * weight),
-      name: `MD5 Biểu Đồ (3 dây cùng ${upCount === 3 ? 'lên' : 'xuống'} → Theo ${previousResult})`,
-      patternId: 'dice_trend_line_md5',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  const twoSameDirection = (upCount === 2 && sameCount === 1) || 
-                           (downCount === 2 && sameCount === 1) ||
-                           (sameCount === 2 && (upCount === 1 || downCount === 1));
-  if (twoSameDirection) {
-    const prediction = previousResult === 'Tài' ? 'Xỉu' : 'Tài';
-    const directionDesc = sameCount === 2 ? '2 dây ngang' : 
-                         (upCount === 2 ? '2 dây lên' : '2 dây xuống');
-    return {
-      detected: true,
-      type: 'two_same_direction',
-      prediction,
-      confidence: Math.round(9 * weight),
-      name: `MD5 Biểu Đồ (${directionDesc} → Bẻ ${previousResult})`,
-      patternId: 'dice_trend_line_md5',
-      analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions }
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeDayGayHu(data, type) {
-  if (data.length < 3) return { detected: false };
-  
-  const current = data[0];
-  const previous = data[1];
-  
-  const currentDices = [current.Xuc_xac_1, current.Xuc_xac_2, current.Xuc_xac_3];
-  const previousDices = [previous.Xuc_xac_1, previous.Xuc_xac_2, previous.Xuc_xac_3];
-  
-  const directions = [];
-  for (let i = 0; i < 3; i++) {
-    if (currentDices[i] > previousDices[i]) {
-      directions.push('up');
-    } else if (currentDices[i] < previousDices[i]) {
-      directions.push('down');
-    } else {
-      directions.push('same');
-    }
-  }
-  
-  const upCount = directions.filter(d => d === 'up').length;
-  const downCount = directions.filter(d => d === 'down').length;
-  const sameCount = directions.filter(d => d === 'same').length;
-  
-  const weight = getPatternWeight(type, 'day_gay');
-  
-  if (sameCount === 2 && upCount === 1) {
-    const sameIndices = directions.map((d, i) => d === 'same' ? i : -1).filter(i => i !== -1);
-    const sameDiceValues = sameIndices.map(i => currentDices[i]);
-    
-    if (sameDiceValues[0] === sameDiceValues[1]) {
-      const sameValueDesc = `${sameDiceValues[0]}-${sameDiceValues[1]}`;
-      
-      return {
-        detected: true,
-        type: 'day_gay_2thang_1len',
-        prediction: 'Xỉu',
-        confidence: Math.round(14 * weight),
-        name: `Dây Gãy (2 dây thẳng ${sameValueDesc} + 1 lên → Xỉu)`,
-        patternId: 'day_gay',
-        analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions, sameDiceValues }
-      };
-    }
-  }
-  
-  if (sameCount === 2 && downCount === 1) {
-    const sameIndices = directions.map((d, i) => d === 'same' ? i : -1).filter(i => i !== -1);
-    const sameDiceValues = sameIndices.map(i => currentDices[i]);
-    
-    if (sameDiceValues[0] === sameDiceValues[1]) {
-      const sameValueDesc = `${sameDiceValues[0]}-${sameDiceValues[1]}`;
-      
-      return {
-        detected: true,
-        type: 'day_gay_2thang_1xuong',
-        prediction: 'Tài',
-        confidence: Math.round(14 * weight),
-        name: `Dây Gãy (2 dây thẳng ${sameValueDesc} + 1 xuống → Tài)`,
-        patternId: 'day_gay',
-        analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions, sameDiceValues }
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeDayGayMd5(data, type) {
-  if (data.length < 3) return { detected: false };
-  
-  const current = data[0];
-  const previous = data[1];
-  
-  const currentDices = [current.Xuc_xac_1, current.Xuc_xac_2, current.Xuc_xac_3];
-  const previousDices = [previous.Xuc_xac_1, previous.Xuc_xac_2, previous.Xuc_xac_3];
-  
-  const directions = [];
-  for (let i = 0; i < 3; i++) {
-    if (currentDices[i] > previousDices[i]) {
-      directions.push('up');
-    } else if (currentDices[i] < previousDices[i]) {
-      directions.push('down');
-    } else {
-      directions.push('same');
-    }
-  }
-  
-  const upCount = directions.filter(d => d === 'up').length;
-  const downCount = directions.filter(d => d === 'down').length;
-  const sameCount = directions.filter(d => d === 'same').length;
-  
-  const weight = getPatternWeight(type, 'day_gay_md5');
-  
-  if (sameCount === 2 && upCount === 1) {
-    const sameIndices = directions.map((d, i) => d === 'same' ? i : -1).filter(i => i !== -1);
-    const sameDiceValues = sameIndices.map(i => currentDices[i]);
-    
-    if (sameDiceValues[0] === sameDiceValues[1]) {
-      const sameValueDesc = `${sameDiceValues[0]}-${sameDiceValues[1]}`;
-      
-      return {
-        detected: true,
-        type: 'day_gay_2thang_1len',
-        prediction: 'Xỉu',
-        confidence: Math.round(14 * weight),
-        name: `MD5 Dây Gãy (2 dây thẳng ${sameValueDesc} + 1 lên → Xỉu)`,
-        patternId: 'day_gay_md5',
-        analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions, sameDiceValues }
-      };
-    }
-  }
-  
-  if (sameCount === 2 && downCount === 1) {
-    const sameIndices = directions.map((d, i) => d === 'same' ? i : -1).filter(i => i !== -1);
-    const sameDiceValues = sameIndices.map(i => currentDices[i]);
-    
-    if (sameDiceValues[0] === sameDiceValues[1]) {
-      const sameValueDesc = `${sameDiceValues[0]}-${sameDiceValues[1]}`;
-      
-      return {
-        detected: true,
-        type: 'day_gay_2thang_1xuong',
-        prediction: 'Tài',
-        confidence: Math.round(14 * weight),
-        name: `MD5 Dây Gãy (2 dây thẳng ${sameValueDesc} + 1 xuống → Tài)`,
-        patternId: 'day_gay_md5',
-        analysis: { upCount, downCount, sameCount, currentDices, previousDices, directions, sameDiceValues }
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeBreakPatternHu(results, data, type) {
-  if (results.length < 4) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'break_pattern_hu');
-  
-  const is1212 = results[0] !== results[1] && 
-                  results[1] !== results[2] && 
-                  results[2] !== results[3] &&
-                  results[0] === results[2] &&
-                  results[1] === results[3];
-  
-  if (is1212) {
-    const prediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'pattern_1212',
-      prediction,
-      confidence: Math.round(14 * weight),
-      name: `Cầu Liên Tục 1-2-1-2 (Bẻ → ${prediction})`,
-      patternId: 'break_pattern_hu'
-    };
-  }
-  
-  const allSame = results.slice(0, 4).every(r => r === results[0]);
-  if (allSame) {
-    const prediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'pattern_1111',
-      prediction,
-      confidence: Math.round(13 * weight),
-      name: `Cầu Liên Tục 1-1-1-1 (Bẻ → ${prediction})`,
-      patternId: 'break_pattern_hu'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeBreakPatternMd5(results, data, type) {
-  if (results.length < 4) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'break_pattern_md5');
-  
-  const is1212 = results[0] !== results[1] && 
-                  results[1] !== results[2] && 
-                  results[2] !== results[3] &&
-                  results[0] === results[2] &&
-                  results[1] === results[3];
-  
-  if (is1212) {
-    const prediction = results[0];
-    return {
-      detected: true,
-      type: 'pattern_1212',
-      prediction,
-      confidence: Math.round(13 * weight),
-      name: `MD5 Cầu 1-2-1-2 (Theo → ${prediction})`,
-      patternId: 'break_pattern_md5'
-    };
-  }
-  
-  const allSame = results.slice(0, 4).every(r => r === results[0]);
-  if (allSame) {
-    const prediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'pattern_1111',
-      prediction,
-      confidence: Math.round(14 * weight),
-      name: `MD5 Cầu 1-1-1-1 (Bẻ → ${prediction})`,
-      patternId: 'break_pattern_md5'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeFibonacciPattern(data, type) {
-  if (data.length < 13) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'fibonacci');
-  const fibSequence = [1, 1, 2, 3, 5, 8, 13];
-  const results = data.slice(0, 13).map(d => d.Ket_qua);
-  
-  let fibTaiCount = 0;
-  let fibXiuCount = 0;
-  
-  fibSequence.forEach(pos => {
-    if (pos <= results.length) {
-      if (results[pos - 1] === 'Tài') fibTaiCount++;
-      else fibXiuCount++;
-    }
-  });
-  
-  if (Math.abs(fibTaiCount - fibXiuCount) >= 4) {
-    const dominant = fibTaiCount > fibXiuCount ? 'Tài' : 'Xỉu';
-    const prediction = dominant === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'fibonacci_reversal',
-      prediction,
-      confidence: Math.round(11 * weight),
-      name: `Fibonacci (${fibTaiCount}T-${fibXiuCount}X → Bẻ ${prediction})`,
-      patternId: 'fibonacci',
-      analysis: { fibTaiCount, fibXiuCount, positions: fibSequence }
-    };
-  }
-  
-  if (fibTaiCount === fibXiuCount) {
-    const prediction = results[0];
-    return {
-      detected: true,
-      type: 'fibonacci_balance',
-      prediction,
-      confidence: Math.round(9 * weight),
-      name: `Fibonacci Cân Bằng (Theo ${prediction})`,
-      patternId: 'fibonacci',
-      analysis: { fibTaiCount, fibXiuCount }
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeMomentumPattern(data, type) {
-  if (data.length < 10) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'momentum');
-  const sums = data.slice(0, 10).map(d => d.Xuc_xac_1 + d.Xuc_xac_2 + d.Xuc_xac_3);
-  
-  let momentum = 0;
-  for (let i = 0; i < sums.length - 1; i++) {
-    momentum += (sums[i] - sums[i + 1]);
-  }
-  
-  const avgMomentum = momentum / (sums.length - 1);
-  
-  if (Math.abs(avgMomentum) > 2) {
-    const prediction = avgMomentum > 0 ? 'Tài' : 'Xỉu';
-    const strength = Math.abs(avgMomentum) > 3 ? 'mạnh' : 'vừa';
-    return {
-      detected: true,
-      type: 'momentum_trend',
-      prediction,
-      confidence: Math.round((10 + Math.min(Math.abs(avgMomentum), 5)) * weight),
-      name: `Momentum ${strength} (${avgMomentum.toFixed(1)} → ${prediction})`,
-      patternId: 'momentum',
-      analysis: { avgMomentum, sums: sums.slice(0, 5) }
-    };
-  }
-  
-  const velocityChange = (sums[0] - sums[1]) - (sums[1] - sums[2]);
-  if (Math.abs(velocityChange) > 4) {
-    const prediction = velocityChange > 0 ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'momentum_reversal',
-      prediction,
-      confidence: Math.round(12 * weight),
-      name: `Momentum Đảo Chiều (${velocityChange > 0 ? '+' : ''}${velocityChange} → ${prediction})`,
-      patternId: 'momentum',
-      analysis: { velocityChange, recentSums: sums.slice(0, 3) }
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeResistanceSupport(data, type) {
-  if (data.length < 20) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'resistance_support');
-  const sums = data.slice(0, 20).map(d => d.Xuc_xac_1 + d.Xuc_xac_2 + d.Xuc_xac_3);
-  
-  const currentSum = sums[0];
-  const maxSum = Math.max(...sums);
-  const minSum = Math.min(...sums);
-  const avgSum = sums.reduce((a, b) => a + b, 0) / sums.length;
-  
-  const resistance = maxSum - 1;
-  const support = minSum + 1;
-  
-  if (currentSum >= resistance) {
-    return {
-      detected: true,
-      type: 'resistance_hit',
-      prediction: 'Xỉu',
-      confidence: Math.round(13 * weight),
-      name: `Kháng Cự (Tổng ${currentSum} ≥ ${resistance} → Xỉu)`,
-      patternId: 'resistance_support',
-      analysis: { currentSum, resistance, maxSum }
-    };
-  }
-  
-  if (currentSum <= support) {
-    return {
-      detected: true,
-      type: 'support_hit',
-      prediction: 'Tài',
-      confidence: Math.round(13 * weight),
-      name: `Hỗ Trợ (Tổng ${currentSum} ≤ ${support} → Tài)`,
-      patternId: 'resistance_support',
-      analysis: { currentSum, support, minSum }
-    };
-  }
-  
-  const distToResistance = resistance - currentSum;
-  const distToSupport = currentSum - support;
-  
-  if (distToResistance <= 2 && distToResistance < distToSupport) {
-    return {
-      detected: true,
-      type: 'near_resistance',
-      prediction: 'Xỉu',
-      confidence: Math.round(10 * weight),
-      name: `Gần Kháng Cự (${currentSum} → ${resistance})`,
-      patternId: 'resistance_support',
-      analysis: { currentSum, resistance, distToResistance }
-    };
-  }
-  
-  if (distToSupport <= 2 && distToSupport < distToResistance) {
-    return {
-      detected: true,
-      type: 'near_support',
-      prediction: 'Tài',
-      confidence: Math.round(10 * weight),
-      name: `Gần Hỗ Trợ (${currentSum} → ${support})`,
-      patternId: 'resistance_support',
-      analysis: { currentSum, support, distToSupport }
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeWavePattern(data, type) {
-  if (data.length < 12) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'wave');
-  const results = data.slice(0, 12).map(d => d.Ket_qua);
-  
-  let waves = [];
-  let currentWave = { type: results[0], count: 1 };
-  
-  for (let i = 1; i < results.length; i++) {
-    if (results[i] === currentWave.type) {
-      currentWave.count++;
-    } else {
-      waves.push(currentWave);
-      currentWave = { type: results[i], count: 1 };
-    }
-  }
-  waves.push(currentWave);
-  
-  if (waves.length >= 4) {
-    const waveLengths = waves.slice(0, 4).map(w => w.count);
-    const isIncreasing = waveLengths.every((v, i, a) => i === 0 || v >= a[i - 1]);
-    const isDecreasing = waveLengths.every((v, i, a) => i === 0 || v <= a[i - 1]);
-    
-    if (isIncreasing && waveLengths[0] < waveLengths[3]) {
-      const prediction = waves[0].type === 'Tài' ? 'Xỉu' : 'Tài';
-      return {
-        detected: true,
-        type: 'wave_expanding',
-        prediction,
-        confidence: Math.round(12 * weight),
-        name: `Sóng Mở Rộng (${waveLengths.join('-')} → Bẻ ${prediction})`,
-        patternId: 'wave',
-        analysis: { waveLengths, pattern: 'expanding' }
-      };
-    }
-    
-    if (isDecreasing && waveLengths[0] > waveLengths[3]) {
-      const prediction = waves[0].type;
-      return {
-        detected: true,
-        type: 'wave_contracting',
-        prediction,
-        confidence: Math.round(11 * weight),
-        name: `Sóng Thu Hẹp (${waveLengths.join('-')} → Theo ${prediction})`,
-        patternId: 'wave',
-        analysis: { waveLengths, pattern: 'contracting' }
-      };
-    }
-  }
-  
-  if (waves.length >= 3) {
-    const lastThreeWaves = waves.slice(0, 3);
-    const avgWaveLength = lastThreeWaves.reduce((a, w) => a + w.count, 0) / 3;
-    
-    if (waves[0].count > avgWaveLength * 1.5) {
-      const prediction = waves[0].type === 'Tài' ? 'Xỉu' : 'Tài';
-      return {
-        detected: true,
-        type: 'wave_peak',
-        prediction,
-        confidence: Math.round(11 * weight),
-        name: `Đỉnh Sóng (${waves[0].count} > avg ${avgWaveLength.toFixed(1)} → Bẻ)`,
-        patternId: 'wave',
-        analysis: { currentWaveLength: waves[0].count, avgWaveLength }
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeGoldenRatio(data, type) {
-  if (data.length < 21) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'golden_ratio');
-  const results = data.slice(0, 21);
-  
-  const goldenPositions = [1, 2, 3, 5, 8, 13, 21];
-  let taiAtGolden = 0;
-  let xiuAtGolden = 0;
-  
-  goldenPositions.forEach(pos => {
-    if (pos <= results.length) {
-      const result = results[pos - 1].Ket_qua;
-      if (result === 'Tài') taiAtGolden++;
-      else xiuAtGolden++;
-    }
-  });
-  
-  const ratio = Math.max(taiAtGolden, xiuAtGolden) / Math.min(taiAtGolden, xiuAtGolden);
-  
-  if (ratio >= 1.6 && ratio <= 1.7) {
-    const dominant = taiAtGolden > xiuAtGolden ? 'Tài' : 'Xỉu';
-    return {
-      detected: true,
-      type: 'golden_ratio_detected',
-      prediction: dominant,
-      confidence: Math.round(12 * weight),
-      name: `Tỷ Lệ Vàng (${taiAtGolden}T:${xiuAtGolden}X = ${ratio.toFixed(2)} → ${dominant})`,
-      patternId: 'golden_ratio',
-      analysis: { taiAtGolden, xiuAtGolden, ratio, goldenPositions }
-    };
-  }
-  
-  if (taiAtGolden >= 5 || xiuAtGolden >= 5) {
-    const dominant = taiAtGolden > xiuAtGolden ? 'Tài' : 'Xỉu';
-    const prediction = dominant === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'golden_extreme',
-      prediction,
-      confidence: Math.round(11 * weight),
-      name: `Fibonacci Cực (${Math.max(taiAtGolden, xiuAtGolden)}/7 → Bẻ ${prediction})`,
-      patternId: 'golden_ratio',
-      analysis: { taiAtGolden, xiuAtGolden }
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeBreakPatternAdvanced(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'break_pattern_advanced') || 1.0;
-  
-  const is11221 = results[0] !== results[1] && 
-                   results[1] !== results[2] && 
-                   results[2] === results[3] &&
-                   results[3] === results[4] &&
-                   results[4] !== results[5];
-  
-  if (is11221) {
-    const prediction = results[2] === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'pattern_11221',
-      prediction,
-      confidence: Math.round(14 * weight),
-      name: `Cầu 1-1-2-2-1 (Bẻ → ${prediction})`,
-      patternId: 'break_pattern_advanced'
-    };
-  }
-  
-  const is2211 = results[0] === results[1] && 
-                  results[1] === results[2] &&
-                  results[2] !== results[3] &&
-                  results[3] !== results[4] &&
-                  results[0] !== results[3];
-  
-  if (is2211) {
-    const prediction = results[3];
-    return {
-      detected: true,
-      type: 'pattern_2211',
-      prediction,
-      confidence: Math.round(13 * weight),
-      name: `Cầu 2-2-1-1 (Theo → ${prediction})`,
-      patternId: 'break_pattern_advanced'
-    };
-  }
-  
-  const is3111 = results[0] === results[1] && 
-                  results[1] === results[2] &&
-                  results[2] === results[3] &&
-                  results[3] !== results[4] &&
-                  results[4] !== results[5];
-  
-  if (is3111) {
-    const prediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'pattern_3111',
-      prediction,
-      confidence: Math.round(15 * weight),
-      name: `Cầu 3-1-1-1 (Bẻ mạnh → ${prediction})`,
-      patternId: 'break_pattern_advanced'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeBreakStreak(results, type) {
-  if (results.length < 5) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'break_streak') || 1.0;
-  
-  let streakType = results[0];
-  let streakLength = 1;
-  for (let i = 1; i < results.length; i++) {
-    if (results[i] === streakType) {
-      streakLength++;
-    } else {
-      break;
-    }
-  }
-  
-  if (streakLength >= 5 && streakLength <= 7) {
-    const prediction = streakType === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'break_streak_medium',
-      prediction,
-      confidence: Math.round((12 + streakLength) * weight),
-      name: `Bẻ Chuỗi ${streakLength} (${streakType} → Bẻ ${prediction})`,
-      patternId: 'break_streak'
-    };
-  }
-  
-  if (streakLength >= 8) {
-    const prediction = streakType === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'break_streak_long',
-      prediction,
-      confidence: Math.round(Math.min(20, 15 + streakLength - 7) * weight),
-      name: `Bẻ Chuỗi Dài ${streakLength} (${streakType} → Bẻ mạnh ${prediction})`,
-      patternId: 'break_streak'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeAlternatingBreak(results, type) {
-  if (results.length < 6) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'alternating_break') || 1.0;
-  
-  let alternatingCount = 0;
-  for (let i = 0; i < results.length - 1; i++) {
-    if (results[i] !== results[i + 1]) {
-      alternatingCount++;
-    } else {
-      break;
-    }
-  }
-  
-  if (alternatingCount >= 6 && alternatingCount <= 8) {
-    const prediction = results[0];
-    return {
-      detected: true,
-      type: 'alternating_break_medium',
-      prediction,
-      confidence: Math.round((13 + alternatingCount - 5) * weight),
-      name: `Bẻ Đảo ${alternatingCount} phiên (Theo ${prediction})`,
-      patternId: 'alternating_break'
-    };
-  }
-  
-  if (alternatingCount >= 9) {
-    const prediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
-    return {
-      detected: true,
-      type: 'alternating_break_long',
-      prediction,
-      confidence: Math.round(Math.min(18, 14 + alternatingCount - 8) * weight),
-      name: `Bẻ Đảo Dài ${alternatingCount} (Bẻ → ${prediction})`,
-      patternId: 'alternating_break'
-    };
-  }
-  
-  return { detected: false };
-}
-
-function analyzeDoublePairBreak(results, type) {
-  if (results.length < 8) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'double_pair_break') || 1.0;
-  
-  const isPair1 = results[0] === results[1];
-  const isPair2 = results[2] === results[3];
-  const isPair3 = results[4] === results[5];
-  const isPair4 = results[6] === results[7];
-  
-  if (isPair1 && isPair2 && isPair3 && isPair4) {
-    const pairType1 = results[0];
-    const pairType2 = results[2];
-    
-    const allSamePair = pairType1 === pairType2 && pairType2 === results[4] && results[4] === results[6];
-    if (allSamePair) {
-      const prediction = pairType1 === 'Tài' ? 'Xỉu' : 'Tài';
-      return {
-        detected: true,
-        type: 'four_same_pairs',
-        prediction,
-        confidence: Math.round(16 * weight),
-        name: `4 Cặp Cùng (${pairType1} → Bẻ mạnh ${prediction})`,
-        patternId: 'double_pair_break'
-      };
-    }
-    
-    const alternatingPairs = pairType1 !== pairType2 && pairType2 !== results[4] && results[4] !== results[6];
-    if (alternatingPairs) {
-      const prediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
-      return {
-        detected: true,
-        type: 'alternating_pairs',
-        prediction,
-        confidence: Math.round(14 * weight),
-        name: `Cặp Đảo Xen Kẽ (Bẻ → ${prediction})`,
-        patternId: 'double_pair_break'
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-function analyzeTriplePattern(results, type) {
-  if (results.length < 9) return { detected: false };
-  
-  const weight = getPatternWeight(type, 'triple_pattern') || 1.0;
-  
-  const isTriple1 = results[0] === results[1] && results[1] === results[2];
-  const isTriple2 = results[3] === results[4] && results[4] === results[5];
-  const isTriple3 = results[6] === results[7] && results[7] === results[8];
-  
-  if (isTriple1 && isTriple2 && isTriple3) {
-    const tripleType1 = results[0];
-    const tripleType2 = results[3];
-    const tripleType3 = results[6];
-    
-    if (tripleType1 === tripleType2 && tripleType2 === tripleType3) {
-      const prediction = tripleType1 === 'Tài' ? 'Xỉu' : 'Tài';
-      return {
-        detected: true,
-        type: 'three_same_triples',
-        prediction,
-        confidence: Math.round(17 * weight),
-        name: `3 Bộ Ba Cùng ${tripleType1} (Bẻ rất mạnh → ${prediction})`,
-        patternId: 'triple_pattern'
-      };
-    }
-    
-    if (tripleType1 !== tripleType2 && tripleType2 !== tripleType3) {
-      const prediction = tripleType1;
-      return {
-        detected: true,
-        type: 'alternating_triples',
-        prediction,
-        confidence: Math.round(15 * weight),
-        name: `Bộ Ba Đảo (Theo → ${prediction})`,
-        patternId: 'triple_pattern'
-      };
-    }
-  }
-  
-  return { detected: false };
-}
-
-// ==================== MAIN PREDICTION WITH MONTE CARLO ====================
-
-function calculateAdvancedPredictionWithMC(data, type) {
-  const last50 = data.slice(0, 50);
-  const results = last50.map(d => d.Ket_qua);
-  
-  initializePatternStats(type);
-  
-  let predictions = [];
-  let factors = [];
-  let allPatterns = [];
-  
-  // Run all pattern analyses
-  const cauBet = analyzeCauBet(results, type);
-  if (cauBet.detected) {
-    predictions.push({ prediction: cauBet.prediction, confidence: cauBet.confidence, priority: 10, name: cauBet.name });
-    factors.push(cauBet.name);
-    allPatterns.push(cauBet);
-  }
-  
-  const cauDao11 = analyzeCauDao11(results, type);
-  if (cauDao11.detected) {
-    predictions.push({ prediction: cauDao11.prediction, confidence: cauDao11.confidence, priority: 9, name: cauDao11.name });
-    factors.push(cauDao11.name);
-    allPatterns.push(cauDao11);
-  }
-  
-  const cau22 = analyzeCau22(results, type);
-  if (cau22.detected) {
-    predictions.push({ prediction: cau22.prediction, confidence: cau22.confidence, priority: 8, name: cau22.name });
-    factors.push(cau22.name);
-    allPatterns.push(cau22);
-  }
-  
-  const cau33 = analyzeCau33(results, type);
-  if (cau33.detected) {
-    predictions.push({ prediction: cau33.prediction, confidence: cau33.confidence, priority: 8, name: cau33.name });
-    factors.push(cau33.name);
-    allPatterns.push(cau33);
-  }
-  
-  const cau121 = analyzeCau121(results, type);
-  if (cau121.detected) {
-    predictions.push({ prediction: cau121.prediction, confidence: cau121.confidence, priority: 7, name: cau121.name });
-    factors.push(cau121.name);
-    allPatterns.push(cau121);
-  }
-  
-  const cau123 = analyzeCau123(results, type);
-  if (cau123.detected) {
-    predictions.push({ prediction: cau123.prediction, confidence: cau123.confidence, priority: 7, name: cau123.name });
-    factors.push(cau123.name);
-    allPatterns.push(cau123);
-  }
-  
-  const cau321 = analyzeCau321(results, type);
-  if (cau321.detected) {
-    predictions.push({ prediction: cau321.prediction, confidence: cau321.confidence, priority: 7, name: cau321.name });
-    factors.push(cau321.name);
-    allPatterns.push(cau321);
-  }
-  
-  const cauNhayCoc = analyzeCauNhayCoc(results, type);
-  if (cauNhayCoc.detected) {
-    predictions.push({ prediction: cauNhayCoc.prediction, confidence: cauNhayCoc.confidence, priority: 6, name: cauNhayCoc.name });
-    factors.push(cauNhayCoc.name);
-    allPatterns.push(cauNhayCoc);
-  }
-  
-  const cauNhipNghieng = analyzeCauNhipNghieng(results, type);
-  if (cauNhipNghieng.detected) {
-    predictions.push({ prediction: cauNhipNghieng.prediction, confidence: cauNhipNghieng.confidence, priority: 7, name: cauNhipNghieng.name });
-    factors.push(cauNhipNghieng.name);
-    allPatterns.push(cauNhipNghieng);
-  }
-  
-  const cau3Van1 = analyzeCau3Van1(results, type);
-  if (cau3Van1.detected) {
-    predictions.push({ prediction: cau3Van1.prediction, confidence: cau3Van1.confidence, priority: 6, name: cau3Van1.name });
-    factors.push(cau3Van1.name);
-    allPatterns.push(cau3Van1);
-  }
-  
-  const cauBeCau = analyzeCauBeCau(results, type);
-  if (cauBeCau.detected) {
-    predictions.push({ prediction: cauBeCau.prediction, confidence: cauBeCau.confidence, priority: 8, name: cauBeCau.name });
-    factors.push(cauBeCau.name);
-    allPatterns.push(cauBeCau);
-  }
-  
-  const cyclePattern = detectCyclePattern(results, type);
-  if (cyclePattern.detected) {
-    predictions.push({ prediction: cyclePattern.prediction, confidence: cyclePattern.confidence, priority: 7, name: cyclePattern.name });
-    factors.push(cyclePattern.name);
-    allPatterns.push(cyclePattern);
-  }
-  
-  const cau44 = analyzeCau44(results, type);
-  if (cau44.detected) {
-    predictions.push({ prediction: cau44.prediction, confidence: cau44.confidence, priority: 9, name: cau44.name });
-    factors.push(cau44.name);
-    allPatterns.push(cau44);
-  }
-  
-  const cau55 = analyzeCau55(results, type);
-  if (cau55.detected) {
-    predictions.push({ prediction: cau55.prediction, confidence: cau55.confidence, priority: 9, name: cau55.name });
-    factors.push(cau55.name);
-    allPatterns.push(cau55);
-  }
-  
-  const cau212 = analyzeCau212(results, type);
-  if (cau212.detected) {
-    predictions.push({ prediction: cau212.prediction, confidence: cau212.confidence, priority: 8, name: cau212.name });
-    factors.push(cau212.name);
-    allPatterns.push(cau212);
-  }
-  
-  const cau1221 = analyzeCau1221(results, type);
-  if (cau1221.detected) {
-    predictions.push({ prediction: cau1221.prediction, confidence: cau1221.confidence, priority: 8, name: cau1221.name });
-    factors.push(cau1221.name);
-    allPatterns.push(cau1221);
-  }
-  
-  const cau2112 = analyzeCau2112(results, type);
-  if (cau2112.detected) {
-    predictions.push({ prediction: cau2112.prediction, confidence: cau2112.confidence, priority: 8, name: cau2112.name });
-    factors.push(cau2112.name);
-    allPatterns.push(cau2112);
-  }
-  
-  const cauGap = analyzeCauGap(results, type);
-  if (cauGap.detected) {
-    predictions.push({ prediction: cauGap.prediction, confidence: cauGap.confidence, priority: 7, name: cauGap.name });
-    factors.push(cauGap.name);
-    allPatterns.push(cauGap);
-  }
-  
-  const cauZiczac = analyzeCauZiczac(results, type);
-  if (cauZiczac.detected) {
-    predictions.push({ prediction: cauZiczac.prediction, confidence: cauZiczac.confidence, priority: 8, name: cauZiczac.name });
-    factors.push(cauZiczac.name);
-    allPatterns.push(cauZiczac);
-  }
-  
-  const cauDoi = analyzeCauDoi(results, type);
-  if (cauDoi.detected) {
-    predictions.push({ prediction: cauDoi.prediction, confidence: cauDoi.confidence, priority: 8, name: cauDoi.name });
-    factors.push(cauDoi.name);
-    allPatterns.push(cauDoi);
-  }
-  
-  const cauRong = analyzeCauRong(results, type);
-  if (cauRong.detected) {
-    predictions.push({ prediction: cauRong.prediction, confidence: cauRong.confidence, priority: 10, name: cauRong.name });
-    factors.push(cauRong.name);
-    allPatterns.push(cauRong);
-  }
-  
-  const smartBet = analyzeSmartBet(results, type);
-  if (smartBet.detected) {
-    predictions.push({ prediction: smartBet.prediction, confidence: smartBet.confidence, priority: 9, name: smartBet.name });
-    factors.push(smartBet.name);
-    allPatterns.push(smartBet);
-  }
-  
-  const breakPatternAdvanced = analyzeBreakPatternAdvanced(results, type);
-  if (breakPatternAdvanced.detected) {
-    predictions.push({ prediction: breakPatternAdvanced.prediction, confidence: breakPatternAdvanced.confidence, priority: 11, name: breakPatternAdvanced.name });
-    factors.push(breakPatternAdvanced.name);
-    allPatterns.push(breakPatternAdvanced);
-  }
-  
-  const breakStreak = analyzeBreakStreak(results, type);
-  if (breakStreak.detected) {
-    predictions.push({ prediction: breakStreak.prediction, confidence: breakStreak.confidence, priority: 12, name: breakStreak.name });
-    factors.push(breakStreak.name);
-    allPatterns.push(breakStreak);
-  }
-  
-  const alternatingBreak = analyzeAlternatingBreak(results, type);
-  if (alternatingBreak.detected) {
-    predictions.push({ prediction: alternatingBreak.prediction, confidence: alternatingBreak.confidence, priority: 11, name: alternatingBreak.name });
-    factors.push(alternatingBreak.name);
-    allPatterns.push(alternatingBreak);
-  }
-  
-  const doublePairBreak = analyzeDoublePairBreak(results, type);
-  if (doublePairBreak.detected) {
-    predictions.push({ prediction: doublePairBreak.prediction, confidence: doublePairBreak.confidence, priority: 13, name: doublePairBreak.name });
-    factors.push(doublePairBreak.name);
-    allPatterns.push(doublePairBreak);
-  }
-  
-  const triplePattern = analyzeTriplePattern(results, type);
-  if (triplePattern.detected) {
-    predictions.push({ prediction: triplePattern.prediction, confidence: triplePattern.confidence, priority: 14, name: triplePattern.name });
-    factors.push(triplePattern.name);
-    allPatterns.push(triplePattern);
-  }
-  
-  if (type === 'hu') {
-    const diceTrendLineHu = analyzeDiceTrendLineHu(last50, type);
-    if (diceTrendLineHu.detected) {
-      predictions.push({ prediction: diceTrendLineHu.prediction, confidence: diceTrendLineHu.confidence, priority: 11, name: diceTrendLineHu.name });
-      factors.push(diceTrendLineHu.name);
-      allPatterns.push(diceTrendLineHu);
-    }
-    
-    const breakPatternHu = analyzeBreakPatternHu(results, last50, type);
-    if (breakPatternHu.detected) {
-      predictions.push({ prediction: breakPatternHu.prediction, confidence: breakPatternHu.confidence, priority: 12, name: breakPatternHu.name });
-      factors.push(breakPatternHu.name);
-      allPatterns.push(breakPatternHu);
-    }
-    
-    const dayGayHu = analyzeDayGayHu(last50, type);
-    if (dayGayHu.detected) {
-      predictions.push({ prediction: dayGayHu.prediction, confidence: dayGayHu.confidence, priority: 13, name: dayGayHu.name });
-      factors.push(dayGayHu.name);
-      allPatterns.push(dayGayHu);
-    }
-  }
-  
-  if (type === 'md5') {
-    const diceTrendLineMd5 = analyzeDiceTrendLineMd5(last50, type);
-    if (diceTrendLineMd5.detected) {
-      predictions.push({ prediction: diceTrendLineMd5.prediction, confidence: diceTrendLineMd5.confidence, priority: 11, name: diceTrendLineMd5.name });
-      factors.push(diceTrendLineMd5.name);
-      allPatterns.push(diceTrendLineMd5);
-    }
-    
-    const breakPatternMd5 = analyzeBreakPatternMd5(results, last50, type);
-    if (breakPatternMd5.detected) {
-      predictions.push({ prediction: breakPatternMd5.prediction, confidence: breakPatternMd5.confidence, priority: 12, name: breakPatternMd5.name });
-      factors.push(breakPatternMd5.name);
-      allPatterns.push(breakPatternMd5);
-    }
-    
-    const dayGayMd5 = analyzeDayGayMd5(last50, type);
-    if (dayGayMd5.detected) {
-      predictions.push({ prediction: dayGayMd5.prediction, confidence: dayGayMd5.confidence, priority: 13, name: dayGayMd5.name });
-      factors.push(dayGayMd5.name);
-      allPatterns.push(dayGayMd5);
-    }
-  }
-  
-  const distribution = analyzeDistribution(last50, type);
-  if (distribution.imbalance > 0.2) {
-    const minority = distribution.taiPercent < 50 ? 'Tài' : 'Xỉu';
-    const weight = getPatternWeight(type, 'distribution');
-    predictions.push({ prediction: minority, confidence: Math.round(6 * weight), priority: 5, name: 'Phân bố lệch' });
-    factors.push(`Phân bố lệch (T:${distribution.taiPercent.toFixed(0)}% - X:${distribution.xiuPercent.toFixed(0)}%)`);
-  }
-  
-  const dicePatterns = analyzeDicePatterns(last50);
-  if (dicePatterns.averageSum > 11.5) {
-    const weight = getPatternWeight(type, 'dice_pattern');
-    predictions.push({ prediction: 'Xỉu', confidence: Math.round(5 * weight), priority: 4, name: 'Tổng TB cao' });
-    factors.push(`Tổng TB cao (${dicePatterns.averageSum.toFixed(1)})`);
-  } else if (dicePatterns.averageSum < 9.5) {
-    const weight = getPatternWeight(type, 'dice_pattern');
-    predictions.push({ prediction: 'Tài', confidence: Math.round(5 * weight), priority: 4, name: 'Tổng TB thấp' });
-    factors.push(`Tổng TB thấp (${dicePatterns.averageSum.toFixed(1)})`);
-  }
-  
-  const sumTrend = analyzeSumTrend(last50);
-  if (sumTrend.strength > 0.4) {
-    const trendPrediction = sumTrend.trend === 'increasing' ? 'Tài' : 'Xỉu';
-    const weight = getPatternWeight(type, 'sum_trend');
-    predictions.push({ prediction: trendPrediction, confidence: Math.round(4 * weight), priority: 3, name: 'Xu hướng tổng' });
-    factors.push(`Xu hướng tổng ${sumTrend.trend === 'increasing' ? 'tăng' : 'giảm'}`);
-  }
-  
-  const edgeCases = analyzeEdgeCases(last50, type);
-  if (edgeCases.detected) {
-    predictions.push({ prediction: edgeCases.prediction, confidence: edgeCases.confidence, priority: 5, name: edgeCases.name });
-    factors.push(edgeCases.name);
-    allPatterns.push(edgeCases);
-  }
-  
-  const momentum = analyzeRecentMomentum(results);
-  if (momentum.window_3 && momentum.window_10) {
-    const shortTermDiff = Math.abs(momentum.window_3.taiRatio - momentum.window_10.taiRatio);
-    if (shortTermDiff > 0.3) {
-      const reversePrediction = momentum.window_3.dominant === 'Tài' ? 'Xỉu' : 'Tài';
-      const weight = getPatternWeight(type, 'momentum');
-      predictions.push({ prediction: reversePrediction, confidence: Math.round(5 * weight), priority: 4, name: 'Biến động ngắn hạn' });
-      factors.push('Biến động ngắn hạn mạnh');
-    }
-  }
-  
-  const fibonacciPattern = analyzeFibonacciPattern(last50, type);
-  if (fibonacciPattern.detected) {
-    predictions.push({ prediction: fibonacciPattern.prediction, confidence: fibonacciPattern.confidence, priority: 8, name: fibonacciPattern.name });
-    factors.push(fibonacciPattern.name);
-    allPatterns.push(fibonacciPattern);
-  }
-  
-  const momentumPattern = analyzeMomentumPattern(last50, type);
-  if (momentumPattern.detected) {
-    predictions.push({ prediction: momentumPattern.prediction, confidence: momentumPattern.confidence, priority: 9, name: momentumPattern.name });
-    factors.push(momentumPattern.name);
-    allPatterns.push(momentumPattern);
-  }
-  
-  const resistanceSupport = analyzeResistanceSupport(last50, type);
-  if (resistanceSupport.detected) {
-    predictions.push({ prediction: resistanceSupport.prediction, confidence: resistanceSupport.confidence, priority: 10, name: resistanceSupport.name });
-    factors.push(resistanceSupport.name);
-    allPatterns.push(resistanceSupport);
-  }
-  
-  const wavePattern = analyzeWavePattern(last50, type);
-  if (wavePattern.detected) {
-    predictions.push({ prediction: wavePattern.prediction, confidence: wavePattern.confidence, priority: 8, name: wavePattern.name });
-    factors.push(wavePattern.name);
-    allPatterns.push(wavePattern);
-  }
-  
-  const goldenRatio = analyzeGoldenRatio(last50, type);
-  if (goldenRatio.detected) {
-    predictions.push({ prediction: goldenRatio.prediction, confidence: goldenRatio.confidence, priority: 9, name: goldenRatio.name });
-    factors.push(goldenRatio.name);
-    allPatterns.push(goldenRatio);
-  }
-  
-  // ==================== MONTE CARLO SIMULATION ====================
-  let monteCarloResult = null;
-  let markovResult = null;
-  
-  if (monteCarloSimulators[type] && last50.length >= 30) {
-    try {
-      monteCarloResult = monteCarloSimulators[type].runSimulation(last50, 15000);
-      markovResult = monteCarloSimulators[type].runMarkovChainSimulation(last50, 10000);
-      
-      if (monteCarloResult && monteCarloResult.similarPatternsCount > 10) {
-        const mcConfidence = monteCarloResult.confidence;
-        predictions.push({ 
-          prediction: monteCarloResult.prediction, 
-          confidence: mcConfidence, 
-          priority: 15, 
-          name: `Monte Carlo (${monteCarloResult.similarPatternsCount} patterns, top ${monteCarloResult.topSimilarity.toFixed(0)}%)` 
-        });
-        factors.push(`Monte Carlo: ${(monteCarloResult.taiProbability * 100).toFixed(1)}% Tài - ${(monteCarloResult.xiuProbability * 100).toFixed(1)}% Xỉu`);
-      }
-      
-      if (markovResult && markovResult.confidence > 55) {
-        predictions.push({ 
-          prediction: markovResult.prediction, 
-          confidence: markovResult.confidence, 
-          priority: 14, 
-          name: `Markov Chain (${(parseFloat(markovResult.taiProbability) * 100).toFixed(1)}% Tài)` 
-        });
-        factors.push(`Markov Chain: ${(parseFloat(markovResult.taiProbability) * 100).toFixed(1)}% Tài`);
-      }
-    } catch (mcError) {
-      console.error(`[MC] Error in Monte Carlo for ${type}:`, mcError.message);
-    }
-  }
-  
-  if (predictions.length === 0) {
-    const cauTuNhien = analyzeCauTuNhien(results, type);
-    predictions.push({ prediction: cauTuNhien.prediction, confidence: cauTuNhien.confidence, priority: 1, name: cauTuNhien.name });
-    factors.push(cauTuNhien.name);
-    allPatterns.push(cauTuNhien);
-  }
-  
-  predictions.sort((a, b) => b.priority - a.priority || b.confidence - a.confidence);
-  
-  const taiVotes = predictions.filter(p => p.prediction === 'Tài');
-  const xiuVotes = predictions.filter(p => p.prediction === 'Xỉu');
-  
-  const taiScore = taiVotes.reduce((sum, p) => sum + p.confidence * p.priority, 0);
-  const xiuScore = xiuVotes.reduce((sum, p) => sum + p.confidence * p.priority, 0);
-  
-  let finalPrediction = taiScore >= xiuScore ? 'Tài' : 'Xỉu';
-  
-  // Apply Monte Carlo override if confidence is high
-  if (monteCarloResult && monteCarloResult.confidence >= 70 && monteCarloResult.similarPatternsCount >= 30) {
-    finalPrediction = monteCarloResult.prediction;
-  }
-  
-  finalPrediction = getSmartPredictionAdjustment(type, finalPrediction, allPatterns);
-  
-  let baseConfidence = 50;
-  
-  const topPredictions = predictions.slice(0, 3);
-  topPredictions.forEach(p => {
-    if (p.prediction === finalPrediction) {
-      baseConfidence += p.confidence * 0.5;
-    }
-  });
-  
-  const agreementRatio = (finalPrediction === 'Tài' ? taiVotes.length : xiuVotes.length) / predictions.length;
-  baseConfidence += Math.round(agreementRatio * 15);
-  
-  const adaptiveBoost = getAdaptiveConfidenceBoost(type);
-  baseConfidence += adaptiveBoost;
-  
-  // Boost from Monte Carlo
-  if (monteCarloResult && monteCarloResult.prediction === finalPrediction) {
-    baseConfidence += 8;
-  }
-  
-  const randomAdjust = (Math.random() * 4) - 2;
-  let finalConfidence = Math.round(baseConfidence + randomAdjust);
-  
-  finalConfidence = Math.max(55, Math.min(92, finalConfidence));
-  
-  return {
-    prediction: finalPrediction,
-    confidence: finalConfidence,
-    factors,
-    allPatterns,
-    monteCarlo: monteCarloResult ? {
-      prediction: monteCarloResult.prediction,
-      confidence: monteCarloResult.confidence,
-      taiProbability: monteCarloResult.taiProbability,
-      xiuProbability: monteCarloResult.xiuProbability,
-      similarPatternsCount: monteCarloResult.similarPatternsCount
-    } : null,
-    markovChain: markovResult ? {
-      prediction: markovResult.prediction,
-      confidence: markovResult.confidence,
-      taiProbability: markovResult.taiProbability
-    } : null,
-    detailedAnalysis: {
-      totalPatterns: predictions.length,
-      taiVotes: taiVotes.length,
-      xiuVotes: xiuVotes.length,
-      taiScore: Math.round(taiScore),
-      xiuScore: Math.round(xiuScore),
-      topPattern: predictions[0]?.name || 'N/A',
-      distribution,
-      dicePatterns,
-      sumTrend,
-      adaptiveBoost,
-      learningStats: {
-        totalPredictions: learningData[type].totalPredictions,
-        correctPredictions: learningData[type].correctPredictions,
-        accuracy: learningData[type].totalPredictions > 0 
-          ? (learningData[type].correctPredictions / learningData[type].totalPredictions * 100).toFixed(1) + '%'
-          : 'N/A',
-        currentStreak: learningData[type].streakAnalysis.currentStreak,
-        bestStreak: learningData[type].streakAnalysis.bestStreak,
-        worstStreak: learningData[type].streakAnalysis.worstStreak
-      }
-    }
-  };
+function normalizeResult(result) {
+  if (result === 'Tài' || result === 'tài') return 'tai';
+  if (result === 'Xỉu' || result === 'xỉu') return 'xiu';
+  return result.toLowerCase();
 }
 
 function savePredictionToHistory(type, phien, prediction, confidence) {
@@ -3133,18 +558,363 @@ function savePredictionToHistory(type, phien, prediction, confidence) {
     id: 'kapub',
     timestamp: new Date().toISOString()
   };
-  
   predictionHistory[type].unshift(record);
-  
   if (predictionHistory[type].length > MAX_HISTORY) {
     predictionHistory[type] = predictionHistory[type].slice(0, MAX_HISTORY);
   }
-  
   return record;
 }
 
-// ==================== EXPRESS ENDPOINTS ====================
+function recordPrediction(type, phien, prediction, confidence, factors) {
+  const record = {
+    phien: phien.toString(),
+    prediction,
+    confidence,
+    factors,
+    timestamp: new Date().toISOString(),
+    verified: false,
+    actual: null,
+    isCorrect: null
+  };
+  learningData[type].predictions.unshift(record);
+  learningData[type].totalPredictions++;
+  if (learningData[type].predictions.length > 500) {
+    learningData[type].predictions = learningData[type].predictions.slice(0, 500);
+  }
+  saveLearningData();
+}
 
+async function verifyPredictions(type, currentData) {
+  let updated = false;
+  for (const pred of learningData[type].predictions) {
+    if (pred.verified) continue;
+    const actualResult = currentData.find(d => d.Phien.toString() === pred.phien);
+    if (actualResult) {
+      pred.verified = true;
+      pred.actual = actualResult.Ket_qua;
+      const predictedNormalized = pred.prediction === 'Tài' ? 'Tài' : 'Xỉu';
+      pred.isCorrect = pred.actual === predictedNormalized;
+      
+      if (pred.isCorrect) {
+        learningData[type].correctPredictions++;
+        if (learningData[type].streakAnalysis.currentStreak >= 0) learningData[type].streakAnalysis.currentStreak++;
+        else learningData[type].streakAnalysis.currentStreak = 1;
+        if (learningData[type].streakAnalysis.currentStreak > learningData[type].streakAnalysis.bestStreak) {
+          learningData[type].streakAnalysis.bestStreak = learningData[type].streakAnalysis.currentStreak;
+        }
+      } else {
+        if (learningData[type].streakAnalysis.currentStreak <= 0) learningData[type].streakAnalysis.currentStreak--;
+        else learningData[type].streakAnalysis.currentStreak = -1;
+        if (learningData[type].streakAnalysis.currentStreak < learningData[type].streakAnalysis.worstStreak) {
+          learningData[type].streakAnalysis.worstStreak = learningData[type].streakAnalysis.currentStreak;
+        }
+      }
+      
+      learningData[type].recentAccuracy.push(pred.isCorrect ? 1 : 0);
+      if (learningData[type].recentAccuracy.length > 50) learningData[type].recentAccuracy.shift();
+      
+      const stateKey = rlLearner[type].getStateKey(
+        currentData.slice(0, 10).map(d => d.Ket_qua), []
+      );
+      const reward = pred.isCorrect ? 1 : -1;
+      const nextState = stateKey;
+      rlLearner[type].updateQValue(stateKey, pred.prediction, reward, nextState);
+      
+      anomalyDetector.learnFromResult(pred.prediction, pred.actual, pred.confidence);
+      anomalyDetector.updateTimeWindowStats(pred.actual, new Date(pred.timestamp));
+      
+      updated = true;
+    }
+  }
+  if (updated) {
+    learningData[type].lastUpdate = new Date().toISOString();
+    saveLearningData();
+    anomalyDetector.saveAnomalyData();
+  }
+}
+
+function saveLearningData() {
+  try {
+    fs.writeFileSync(LEARNING_FILE, JSON.stringify(learningData, null, 2));
+  } catch (error) {
+    console.error('Error saving learning data:', error.message);
+  }
+}
+
+function loadLearningData() {
+  try {
+    if (fs.existsSync(LEARNING_FILE)) {
+      const data = fs.readFileSync(LEARNING_FILE, 'utf8');
+      const parsed = JSON.parse(data);
+      learningData = { ...learningData, ...parsed };
+      console.log('Learning data loaded');
+    }
+  } catch (error) {
+    console.error('Error loading learning data:', error.message);
+  }
+}
+
+function loadPredictionHistory() {
+  try {
+    if (fs.existsSync(HISTORY_FILE)) {
+      const data = fs.readFileSync(HISTORY_FILE, 'utf8');
+      const parsed = JSON.parse(data);
+      predictionHistory = parsed.history || { hu: [], md5: [] };
+      lastProcessedPhien = parsed.lastProcessedPhien || { hu: null, md5: null };
+      console.log('Prediction history loaded');
+    }
+  } catch (error) {
+    console.error('Error loading prediction history:', error.message);
+  }
+}
+
+function savePredictionHistory() {
+  try {
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify({
+      history: predictionHistory,
+      lastProcessedPhien,
+      lastSaved: new Date().toISOString()
+    }, null, 2));
+  } catch (error) {
+    console.error('Error saving prediction history:', error.message);
+  }
+}
+
+// ==================== PATTERN ANALYSIS FUNCTIONS ====================
+function detectBreakPattern(results, type) {
+  if (results.length < 6) return null;
+  
+  const pattern = results.slice(0, 8);
+  let breakDetected = false;
+  let prediction = null;
+  let confidence = 55;
+  
+  if (pattern[0] === pattern[1] && pattern[2] === pattern[3] && pattern[0] !== pattern[2]) {
+    if (pattern[4] === pattern[5] && pattern[4] !== pattern[2]) {
+      breakDetected = true;
+      prediction = pattern[4];
+      confidence = 70;
+    }
+  }
+  
+  if (pattern[0] === pattern[1] && pattern[1] === pattern[2] && pattern[3] !== pattern[0]) {
+    breakDetected = true;
+    prediction = pattern[3] === 'Tài' ? 'Xỉu' : 'Tài';
+    confidence = 75;
+  }
+  
+  let alternatingCount = 1;
+  for (let i = 1; i < Math.min(results.length, 12); i++) {
+    if (results[i] !== results[i-1]) alternatingCount++;
+    else break;
+  }
+  if (alternatingCount >= 6 && alternatingCount <= 9) {
+    breakDetected = true;
+    prediction = results[0];
+    confidence = 68;
+  }
+  if (alternatingCount >= 10) {
+    breakDetected = true;
+    prediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
+    confidence = 72;
+  }
+  
+  return breakDetected ? { prediction, confidence, name: 'Break Pattern' } : null;
+}
+
+function detectTrendReversal(results, type) {
+  if (results.length < 8) return null;
+  
+  const last8 = results.slice(0, 8);
+  const first4 = last8.slice(0, 4);
+  const last4 = last8.slice(4, 8);
+  
+  const first4Tai = first4.filter(r => r === 'Tài').length;
+  const last4Tai = last4.filter(r => r === 'Tài').length;
+  
+  if ((first4Tai >= 3 && last4Tai <= 1) || (first4Tai <= 1 && last4Tai >= 3)) {
+    const prediction = last4Tai >= 3 ? 'Tài' : 'Xỉu';
+    return { prediction, confidence: 68, name: 'Trend Reversal' };
+  }
+  
+  return null;
+}
+
+function analyzeSimplePattern(results) {
+  if (results.length < 3) return { prediction: results[0] || 'Tài', confidence: 50 };
+  
+  let streak = 1;
+  for (let i = 1; i < results.length; i++) {
+    if (results[i] === results[0]) streak++;
+    else break;
+  }
+  if (streak >= 3) {
+    const shouldBreak = streak >= 5;
+    return { 
+      prediction: shouldBreak ? (results[0] === 'Tài' ? 'Xỉu' : 'Tài') : results[0],
+      confidence: 55 + Math.min(15, streak * 2),
+      name: `Streak ${streak}`
+    };
+  }
+  
+  let alternating = true;
+  for (let i = 1; i < Math.min(results.length, 6); i++) {
+    if (results[i] === results[i-1]) {
+      alternating = false;
+      break;
+    }
+  }
+  if (alternating && results.length >= 4) {
+    return {
+      prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài',
+      confidence: 60,
+      name: 'Alternating'
+    };
+  }
+  
+  return {
+    prediction: results[0],
+    confidence: 50,
+    name: 'Follow Previous'
+  };
+}
+
+// ==================== MAIN PREDICTION FUNCTION ====================
+function calculateSuperPrediction(data, type) {
+  const results = data.slice(0, 30).map(d => d.Ket_qua);
+  const currentTime = new Date();
+  const currentHour = currentTime.getHours();
+  
+  let predictions = [];
+  let factors = [];
+  
+  const simplePattern = analyzeSimplePattern(results);
+  predictions.push({ prediction: simplePattern.prediction, confidence: simplePattern.confidence, priority: 5, name: simplePattern.name });
+  factors.push(`Pattern: ${simplePattern.name}`);
+  
+  const breakPattern = detectBreakPattern(results, type);
+  if (breakPattern) {
+    predictions.push({ prediction: breakPattern.prediction, confidence: breakPattern.confidence, priority: 8, name: breakPattern.name });
+    factors.push(`Break: ${breakPattern.name}`);
+  }
+  
+  const trendReversal = detectTrendReversal(results, type);
+  if (trendReversal) {
+    predictions.push({ prediction: trendReversal.prediction, confidence: trendReversal.confidence, priority: 7, name: trendReversal.name });
+    factors.push(`Reversal: ${trendReversal.name}`);
+  }
+  
+  if (monteCarloSimulators[type]) {
+    const mcResult = monteCarloSimulators[type].runBalancedSimulation(data, anomalyDetector, currentHour);
+    if (mcResult && mcResult.prediction) {
+      predictions.push({ 
+        prediction: mcResult.prediction, 
+        confidence: mcResult.confidence, 
+        priority: 9, 
+        name: `Monte Carlo (${mcResult.taiProbability})` 
+      });
+      factors.push(`MC: ${(parseFloat(mcResult.taiProbability) * 100).toFixed(0)}% Tài, Break: ${(parseFloat(mcResult.breakProbability) * 100).toFixed(0)}%`);
+    }
+  }
+  
+  const timePrediction = anomalyDetector.predictByTimeWindow(currentTime);
+  if (timePrediction) {
+    predictions.push({ prediction: timePrediction.prediction, confidence: timePrediction.confidence, priority: 6, name: 'Time Window' });
+    factors.push(`Time: ${timePrediction.prediction} ${timePrediction.confidence}%`);
+  }
+  
+  const anomaly = anomalyDetector.detectAnomaly(results, 10);
+  if (anomaly.isAnomaly) {
+    factors.push(`⚠️ Anomaly detected (${anomaly.taiRatio}% Tài, break:${anomaly.breakDetected})`);
+    if (anomaly.breakDetected && anomaly.breakDirection) {
+      predictions.push({ 
+        prediction: anomaly.breakDirection, 
+        confidence: 70, 
+        priority: 10, 
+        name: 'Anomaly Break' 
+      });
+    }
+    if (anomaly.isAlternatingAnomaly) {
+      const altPrediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
+      predictions.push({ prediction: altPrediction, confidence: 68, priority: 9, name: 'Alternating Anomaly' });
+    }
+  }
+  
+  const stateKey = rlLearner[type].getStateKey(results, []);
+  const qPrediction = rlLearner[type].getQLearningPrediction(stateKey);
+  if (qPrediction) {
+    predictions.push({ prediction: qPrediction, confidence: 62, priority: 6, name: 'Q-Learning' });
+    factors.push(`RL: ${qPrediction}`);
+  }
+  
+  predictions.sort((a, b) => b.priority - a.priority || b.confidence - a.confidence);
+  
+  let taiScore = 0, xiuScore = 0;
+  predictions.forEach(p => {
+    const weight = p.priority;
+    if (p.prediction === 'Tài') taiScore += p.confidence * weight;
+    else xiuScore += p.confidence * weight;
+  });
+  
+  let finalPrediction = taiScore >= xiuScore ? 'Tài' : 'Xỉu';
+  
+  const biasCorrection = anomalyDetector.getBiasCorrection();
+  if (biasCorrection > 0.1 && finalPrediction === 'Xỉu') {
+    finalPrediction = 'Tài';
+    factors.push(`Bias correction: +Tài`);
+  } else if (biasCorrection < -0.1 && finalPrediction === 'Tài') {
+    finalPrediction = 'Xỉu';
+    factors.push(`Bias correction: +Xỉu`);
+  }
+  
+  const totalScore = taiScore + xiuScore;
+  let finalConfidence = totalScore > 0 ? Math.round(Math.max(taiScore, xiuScore) / totalScore * 100) : 55;
+  finalConfidence = Math.max(55, Math.min(88, finalConfidence));
+  
+  return { prediction: finalPrediction, confidence: finalConfidence, factors, allPredictions: predictions };
+}
+
+// ==================== AUTO PROCESS ====================
+async function autoProcessPredictions() {
+  try {
+    const dataHu = await fetchDataHu();
+    if (dataHu && dataHu.length > 0) {
+      updateMonteCarloSimulators('hu', dataHu);
+      const latestHuPhien = dataHu[0].Phien;
+      const nextHuPhien = latestHuPhien + 1;
+      if (lastProcessedPhien.hu !== nextHuPhien) {
+        await verifyPredictions('hu', dataHu);
+        const result = calculateSuperPrediction(dataHu, 'hu');
+        savePredictionToHistory('hu', nextHuPhien, result.prediction, result.confidence);
+        recordPrediction('hu', nextHuPhien, result.prediction, result.confidence, result.factors);
+        lastProcessedPhien.hu = nextHuPhien;
+        console.log(`[Auto] Hu ${nextHuPhien}: ${result.prediction} (${result.confidence}%) | Factors: ${result.factors.slice(0,2).join(', ')}`);
+      }
+    }
+    
+    const dataMd5 = await fetchDataMd5();
+    if (dataMd5 && dataMd5.length > 0) {
+      updateMonteCarloSimulators('md5', dataMd5);
+      const latestMd5Phien = dataMd5[0].Phien;
+      const nextMd5Phien = latestMd5Phien + 1;
+      if (lastProcessedPhien.md5 !== nextMd5Phien) {
+        await verifyPredictions('md5', dataMd5);
+        const result = calculateSuperPrediction(dataMd5, 'md5');
+        savePredictionToHistory('md5', nextMd5Phien, result.prediction, result.confidence);
+        recordPrediction('md5', nextMd5Phien, result.prediction, result.confidence, result.factors);
+        lastProcessedPhien.md5 = nextMd5Phien;
+        console.log(`[Auto] MD5 ${nextMd5Phien}: ${result.prediction} (${result.confidence}%) | Factors: ${result.factors.slice(0,2).join(', ')}`);
+      }
+    }
+    
+    savePredictionHistory();
+    saveLearningData();
+  } catch (error) {
+    console.error('[Auto] Error:', error.message);
+  }
+}
+
+// ==================== EXPRESS ROUTES ====================
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.send('kapub');
@@ -3153,21 +923,14 @@ app.get('/', (req, res) => {
 app.get('/lc79-hu', async (req, res) => {
   try {
     const data = await fetchDataHu();
-    if (!data || data.length === 0) {
-      return res.status(500).json({ error: 'Không thể lấy dữ liệu' });
-    }
-    
+    if (!data || data.length === 0) return res.status(500).json({ error: 'Cannot fetch data' });
     updateMonteCarloSimulators('hu', data);
     await verifyPredictions('hu', data);
-    
     const latestPhien = data[0].Phien;
     const nextPhien = latestPhien + 1;
-    
-    const result = calculateAdvancedPredictionWithMC(data, 'hu');
-    
+    const result = calculateSuperPrediction(data, 'hu');
     savePredictionToHistory('hu', nextPhien, result.prediction, result.confidence);
     recordPrediction('hu', nextPhien, result.prediction, result.confidence, result.factors);
-    
     res.json({
       phien_hien_tai: nextPhien.toString(),
       du_doan: normalizeResult(result.prediction),
@@ -3175,29 +938,21 @@ app.get('/lc79-hu', async (req, res) => {
       id: 'kapub'
     });
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'Lỗi server' });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 app.get('/lc79-md5', async (req, res) => {
   try {
     const data = await fetchDataMd5();
-    if (!data || data.length === 0) {
-      return res.status(500).json({ error: 'Không thể lấy dữ liệu' });
-    }
-    
+    if (!data || data.length === 0) return res.status(500).json({ error: 'Cannot fetch data' });
     updateMonteCarloSimulators('md5', data);
     await verifyPredictions('md5', data);
-    
     const latestPhien = data[0].Phien;
     const nextPhien = latestPhien + 1;
-    
-    const result = calculateAdvancedPredictionWithMC(data, 'md5');
-    
+    const result = calculateSuperPrediction(data, 'md5');
     savePredictionToHistory('md5', nextPhien, result.prediction, result.confidence);
     recordPrediction('md5', nextPhien, result.prediction, result.confidence, result.factors);
-    
     res.json({
       phien_hien_tai: nextPhien.toString(),
       du_doan: normalizeResult(result.prediction),
@@ -3205,147 +960,76 @@ app.get('/lc79-md5', async (req, res) => {
       id: 'kapub'
     });
   } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'Lỗi server' });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 app.get('/lc79-hu/lichsu', async (req, res) => {
   try {
     const data = await fetchDataHu();
-    if (data && data.length > 0) {
-      await verifyPredictions('hu', data);
-    }
-    
+    if (data && data.length > 0) await verifyPredictions('hu', data);
     const historyWithStatus = predictionHistory.hu.map(record => {
       const prediction = learningData.hu.predictions.find(p => p.phien === record.phien_hien_tai);
-      
-      let status = null;
-      let ket_qua_thuc_te = null;
-      
-      if (prediction && prediction.verified) {
-        status = prediction.isCorrect ? '✅' : '❌';
-        ket_qua_thuc_te = prediction.actual;
-      }
-      
       return {
         ...record,
-        ket_qua_thuc_te,
-        status
+        ket_qua_thuc_te: prediction?.actual || null,
+        status: prediction?.isCorrect === true ? '✅' : (prediction?.isCorrect === false ? '❌' : null)
       };
     });
-    
-    res.json({
-      type: 'Lẩu Cua 79 - Tài Xỉu Hũ',
-      history: historyWithStatus,
-      total: historyWithStatus.length
-    });
+    res.json({ type: 'Lẩu Cua 79 - Tài Xỉu Hũ', history: historyWithStatus, total: historyWithStatus.length });
   } catch (error) {
-    res.json({
-      type: 'Lẩu Cua 79 - Tài Xỉu Hũ',
-      history: predictionHistory.hu,
-      total: predictionHistory.hu.length
-    });
+    res.json({ type: 'Lẩu Cua 79 - Tài Xỉu Hũ', history: predictionHistory.hu, total: predictionHistory.hu.length });
   }
 });
 
 app.get('/lc79-md5/lichsu', async (req, res) => {
   try {
     const data = await fetchDataMd5();
-    if (data && data.length > 0) {
-      await verifyPredictions('md5', data);
-    }
-    
+    if (data && data.length > 0) await verifyPredictions('md5', data);
     const historyWithStatus = predictionHistory.md5.map(record => {
       const prediction = learningData.md5.predictions.find(p => p.phien === record.phien_hien_tai);
-      
-      let status = null;
-      let ket_qua_thuc_te = null;
-      
-      if (prediction && prediction.verified) {
-        status = prediction.isCorrect ? '✅' : '❌';
-        ket_qua_thuc_te = prediction.actual;
-      }
-      
       return {
         ...record,
-        ket_qua_thuc_te,
-        status
+        ket_qua_thuc_te: prediction?.actual || null,
+        status: prediction?.isCorrect === true ? '✅' : (prediction?.isCorrect === false ? '❌' : null)
       };
     });
-    
-    res.json({
-      type: 'Lẩu Cua 79 - Tài Xỉu MD5',
-      history: historyWithStatus,
-      total: historyWithStatus.length
-    });
+    res.json({ type: 'Lẩu Cua 79 - Tài Xỉu MD5', history: historyWithStatus, total: historyWithStatus.length });
   } catch (error) {
-    res.json({
-      type: 'Lẩu Cua 79 - Tài Xỉu MD5',
-      history: predictionHistory.md5,
-      total: predictionHistory.md5.length
-    });
+    res.json({ type: 'Lẩu Cua 79 - Tài Xỉu MD5', history: predictionHistory.md5, total: predictionHistory.md5.length });
   }
 });
 
 app.get('/lc79-hu/analysis', async (req, res) => {
   try {
     const data = await fetchDataHu();
-    if (!data || data.length === 0) {
-      return res.status(500).json({ error: 'Không thể lấy dữ liệu' });
-    }
-    
+    if (!data) return res.status(500).json({ error: 'Cannot fetch data' });
     updateMonteCarloSimulators('hu', data);
     await verifyPredictions('hu', data);
-    
-    const result = calculateAdvancedPredictionWithMC(data, 'hu');
-    res.json({
-      prediction: normalizeResult(result.prediction),
-      confidence: result.confidence,
-      factors: result.factors,
-      monteCarlo: result.monteCarlo,
-      markovChain: result.markovChain,
-      analysis: result.detailedAnalysis
-    });
+    const result = calculateSuperPrediction(data, 'hu');
+    res.json({ prediction: normalizeResult(result.prediction), confidence: result.confidence, factors: result.factors });
   } catch (error) {
-    res.status(500).json({ error: 'Lỗi server' });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 app.get('/lc79-md5/analysis', async (req, res) => {
   try {
     const data = await fetchDataMd5();
-    if (!data || data.length === 0) {
-      return res.status(500).json({ error: 'Không thể lấy dữ liệu' });
-    }
-    
+    if (!data) return res.status(500).json({ error: 'Cannot fetch data' });
     updateMonteCarloSimulators('md5', data);
     await verifyPredictions('md5', data);
-    
-    const result = calculateAdvancedPredictionWithMC(data, 'md5');
-    res.json({
-      prediction: normalizeResult(result.prediction),
-      confidence: result.confidence,
-      factors: result.factors,
-      monteCarlo: result.monteCarlo,
-      markovChain: result.markovChain,
-      analysis: result.detailedAnalysis
-    });
+    const result = calculateSuperPrediction(data, 'md5');
+    res.json({ prediction: normalizeResult(result.prediction), confidence: result.confidence, factors: result.factors });
   } catch (error) {
-    res.status(500).json({ error: 'Lỗi server' });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
 app.get('/lc79-hu/learning', (req, res) => {
   const stats = learningData.hu;
-  const accuracy = stats.totalPredictions > 0 
-    ? (stats.correctPredictions / stats.totalPredictions * 100).toFixed(2)
-    : 0;
-  
-  const recentAcc = stats.recentAccuracy.length > 0
-    ? (stats.recentAccuracy.reduce((a, b) => a + b, 0) / stats.recentAccuracy.length * 100).toFixed(2)
-    : 0;
-  
+  const accuracy = stats.totalPredictions > 0 ? (stats.correctPredictions / stats.totalPredictions * 100).toFixed(2) : 0;
+  const recentAcc = stats.recentAccuracy.length > 0 ? (stats.recentAccuracy.reduce((a, b) => a + b, 0) / stats.recentAccuracy.length * 100).toFixed(2) : 0;
   res.json({
     type: 'Lẩu Cua 79 - Tài Xỉu Hũ - Learning Stats',
     totalPredictions: stats.totalPredictions,
@@ -3353,30 +1037,14 @@ app.get('/lc79-hu/learning', (req, res) => {
     overallAccuracy: `${accuracy}%`,
     recentAccuracy: `${recentAcc}%`,
     streakAnalysis: stats.streakAnalysis,
-    patternPerformance: Object.entries(stats.patternStats).map(([id, data]) => ({
-      pattern: id,
-      total: data.total,
-      correct: data.correct,
-      accuracy: data.total > 0 ? (data.correct / data.total * 100).toFixed(1) + '%' : 'N/A',
-      weight: stats.patternWeights[id]?.toFixed(2) || '1.00',
-      recentTrend: data.recentResults.length >= 5 
-        ? (data.recentResults.slice(-5).reduce((a, b) => a + b, 0) / 5 * 100).toFixed(0) + '%'
-        : 'N/A'
-    })).filter(p => p.total > 0),
     lastUpdate: stats.lastUpdate
   });
 });
 
 app.get('/lc79-md5/learning', (req, res) => {
   const stats = learningData.md5;
-  const accuracy = stats.totalPredictions > 0 
-    ? (stats.correctPredictions / stats.totalPredictions * 100).toFixed(2)
-    : 0;
-  
-  const recentAcc = stats.recentAccuracy.length > 0
-    ? (stats.recentAccuracy.reduce((a, b) => a + b, 0) / stats.recentAccuracy.length * 100).toFixed(2)
-    : 0;
-  
+  const accuracy = stats.totalPredictions > 0 ? (stats.correctPredictions / stats.totalPredictions * 100).toFixed(2) : 0;
+  const recentAcc = stats.recentAccuracy.length > 0 ? (stats.recentAccuracy.reduce((a, b) => a + b, 0) / stats.recentAccuracy.length * 100).toFixed(2) : 0;
   res.json({
     type: 'Lẩu Cua 79 - Tài Xỉu MD5 - Learning Stats',
     totalPredictions: stats.totalPredictions,
@@ -3384,82 +1052,47 @@ app.get('/lc79-md5/learning', (req, res) => {
     overallAccuracy: `${accuracy}%`,
     recentAccuracy: `${recentAcc}%`,
     streakAnalysis: stats.streakAnalysis,
-    patternPerformance: Object.entries(stats.patternStats).map(([id, data]) => ({
-      pattern: id,
-      total: data.total,
-      correct: data.correct,
-      accuracy: data.total > 0 ? (data.correct / data.total * 100).toFixed(1) + '%' : 'N/A',
-      weight: stats.patternWeights[id]?.toFixed(2) || '1.00',
-      recentTrend: data.recentResults.length >= 5 
-        ? (data.recentResults.slice(-5).reduce((a, b) => a + b, 0) / 5 * 100).toFixed(0) + '%'
-        : 'N/A'
-    })).filter(p => p.total > 0),
     lastUpdate: stats.lastUpdate
   });
 });
 
 app.get('/reset-learning', (req, res) => {
   learningData = {
-    hu: {
-      predictions: [],
-      patternStats: {},
-      totalPredictions: 0,
-      correctPredictions: 0,
-      patternWeights: { ...DEFAULT_PATTERN_WEIGHTS },
-      lastUpdate: null,
-      streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 },
-      adaptiveThresholds: {},
-      recentAccuracy: []
-    },
-    md5: {
-      predictions: [],
-      patternStats: {},
-      totalPredictions: 0,
-      correctPredictions: 0,
-      patternWeights: { ...DEFAULT_PATTERN_WEIGHTS },
-      lastUpdate: null,
-      streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 },
-      adaptiveThresholds: {},
-      recentAccuracy: []
-    }
+    hu: { predictions: [], patternStats: {}, totalPredictions: 0, correctPredictions: 0, patternWeights: { ...DEFAULT_PATTERN_WEIGHTS }, lastUpdate: null, streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 }, recentAccuracy: [] },
+    md5: { predictions: [], patternStats: {}, totalPredictions: 0, correctPredictions: 0, patternWeights: { ...DEFAULT_PATTERN_WEIGHTS }, lastUpdate: null, streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 }, recentAccuracy: [] }
   };
   monteCarloSimulators = { hu: null, md5: null };
+  anomalyDetector = new AnomalyDetector();
+  rlLearner = { hu: new ReinforcementLearner(), md5: new ReinforcementLearner() };
   saveLearningData();
-  res.json({ message: 'Learning data and Monte Carlo simulators reset successfully' });
+  res.json({ message: 'All learning data and anomaly patterns reset' });
 });
 
+// ==================== START SERVER ====================
 loadLearningData();
 loadPredictionHistory();
+anomalyDetector.loadAnomalyData();
+
+setInterval(() => autoProcessPredictions(), AUTO_SAVE_INTERVAL);
+setTimeout(() => autoProcessPredictions(), 3000);
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
-  console.log('Lau Cua 79 - Advanced Tai Xiu Prediction API with MONTE CARLO SIMULATION v5.0');
-  console.log('');
-  console.log('NEW FEATURES:');
-  console.log('  ★ MONTE CARLO SIMULATION - 15,000+ simulations per prediction');
-  console.log('  ★ MARKOV CHAIN ANALYSIS - 10,000+ state transition simulations');
-  console.log('  ★ PATTERN SIMILARITY MATCHING - AI-based historical pattern recognition');
-  console.log('  ★ PROBABILISTIC CONFIDENCE SCORING');
-  console.log('  ★ Self-learning with pattern weight adjustment');
-  console.log('  ★ Streak analysis and smart reversal');
-  console.log('  ★ Adaptive confidence based on recent performance');
-  console.log('  ★ AUTO-SAVE: History saves automatically every 30s');
-  console.log('');
-  console.log('API SOURCES:');
-  console.log('  - TX Hũ: ' + API_URL_HU);
-  console.log('  - TX MD5: ' + API_URL_MD5);
-  console.log('');
-  console.log('Endpoints:');
-  console.log('  / - Homepage');
-  console.log('  /lc79-hu - Dự đoán Tài Xỉu Hũ (with Monte Carlo)');
-  console.log('  /lc79-md5 - Dự đoán Tài Xỉu MD5 (with Monte Carlo)');
-  console.log('  /lc79-hu/lichsu - Lịch sử dự đoán Hũ');
-  console.log('  /lc79-md5/lichsu - Lịch sử dự đoán MD5');
-  console.log('  /lc79-hu/analysis - Phân tích chi tiết Hũ + MC results');
-  console.log('  /lc79-md5/analysis - Phân tích chi tiết MD5 + MC results');
-  console.log('  /lc79-hu/learning - Thống kê học tập Hũ');
-  console.log('  /lc79-md5/learning - Thống kê học tập MD5');
-  console.log('  /reset-learning - Reset dữ liệu học');
-  
-  startAutoSaveTask();
+  console.log(`\n╔══════════════════════════════════════════════════════════════╗`);
+  console.log(`║   LẨU CUA 79 - SUPER AI PREDICTION v6.0 - FULL CODE        ║`);
+  console.log(`║   Monte Carlo Balanced | Anomaly Detection | Q-Learning    ║`);
+  console.log(`╚══════════════════════════════════════════════════════════════╝\n`);
+  console.log(`Server: http://0.0.0.0:${PORT}`);
+  console.log(`\n🔥 CẢI TIẾN CHÍNH:`);
+  console.log(`   • Monte Carlo CÂN BẰNG - không bias về Xỉu`);
+  console.log(`   • Anomaly Detection - phát hiện điểm bất thường`);
+  console.log(`   • Break Pattern Learning - học chính xác thời điểm bẻ cầu`);
+  console.log(`   • Time Window stats - học theo khung giờ`);
+  console.log(`   • Q-Learning (Reinforcement) - thưởng/phạt thông minh`);
+  console.log(`   • Bias Correction tự động - sửa lệch dự đoán\n`);
+  console.log(`📋 ENDPOINTS:`);
+  console.log(`   GET /lc79-hu        - Dự đoán Tài Xỉu Hũ`);
+  console.log(`   GET /lc79-md5       - Dự đoán Tài Xỉu MD5`);
+  console.log(`   GET /lc79-hu/lichsu - Lịch sử dự đoán Hũ`);
+  console.log(`   GET /lc79-md5/lichsu- Lịch sử dự đoán MD5`);
+  console.log(`   GET /reset-learning - Reset dữ liệu học\n`);
 });
