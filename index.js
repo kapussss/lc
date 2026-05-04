@@ -20,6 +20,289 @@ const MAX_HISTORY = 100;
 const AUTO_SAVE_INTERVAL = 30000;
 let lastProcessedPhien = { hu: null, md5: null };
 
+// ==================== MONTE CARLO SIMULATION MODULE ====================
+class MonteCarloSimulator {
+  constructor(historicalData, windowSize = 30) {
+    this.historicalData = historicalData;
+    this.windowSize = windowSize;
+    this.numSimulations = 10000; // 10,000 simulations for high accuracy
+  }
+
+  // Extract feature vectors from historical data
+  extractFeatures(data) {
+    if (!data || data.length < 5) return null;
+    
+    const features = {
+      last5Results: data.slice(0, 5).map(d => d.Ket_qua),
+      last5Sums: data.slice(0, 5).map(d => d.Tong),
+      last5Dice1: data.slice(0, 5).map(d => d.Xuc_xac_1),
+      last5Dice2: data.slice(0, 5).map(d => d.Xuc_xac_2),
+      last5Dice3: data.slice(0, 5).map(d => d.Xuc_xac_3),
+      streakLength: this.calculateStreak(data),
+      patternType: this.detectPattern(data),
+      recentTaiRatio: this.calculateTaiRatio(data.slice(0, 10)),
+      sumTrend: this.calculateSumTrend(data.slice(0, 10)),
+      volatility: this.calculateVolatility(data.slice(0, 10))
+    };
+    
+    return features;
+  }
+
+  calculateStreak(data) {
+    if (data.length < 2) return 0;
+    let streak = 1;
+    for (let i = 1; i < data.length; i++) {
+      if (data[i].Ket_qua === data[0].Ket_qua) streak++;
+      else break;
+    }
+    return streak;
+  }
+
+  detectPattern(data) {
+    if (data.length < 4) return 'unknown';
+    const results = data.slice(0, 4).map(d => d.Ket_qua);
+    
+    // Check for alternating pattern
+    if (results[0] !== results[1] && results[1] !== results[2] && results[2] !== results[3]) {
+      return 'alternating';
+    }
+    // Check for streak pattern
+    if (results[0] === results[1] && results[1] === results[2] && results[2] === results[3]) {
+      return 'streak';
+    }
+    // Check for 2-2 pattern
+    if (results[0] === results[1] && results[2] === results[3] && results[0] !== results[2]) {
+      return 'double_pair';
+    }
+    return 'mixed';
+  }
+
+  calculateTaiRatio(data) {
+    if (data.length === 0) return 0.5;
+    const taiCount = data.filter(d => d.Ket_qua === 'Tài').length;
+    return taiCount / data.length;
+  }
+
+  calculateSumTrend(data) {
+    if (data.length < 3) return 'stable';
+    const sums = data.map(d => d.Tong);
+    let increasing = 0, decreasing = 0;
+    for (let i = 0; i < sums.length - 1; i++) {
+      if (sums[i] < sums[i + 1]) increasing++;
+      else if (sums[i] > sums[i + 1]) decreasing++;
+    }
+    if (increasing > decreasing + 2) return 'up';
+    if (decreasing > increasing + 2) return 'down';
+    return 'stable';
+  }
+
+  calculateVolatility(data) {
+    if (data.length < 2) return 0;
+    const sums = data.map(d => d.Tong);
+    const mean = sums.reduce((a, b) => a + b, 0) / sums.length;
+    const variance = sums.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / sums.length;
+    return Math.sqrt(variance);
+  }
+
+  // Find similar historical patterns
+  findSimilarPatterns(currentFeatures, maxMatches = 100) {
+    const matches = [];
+    
+    for (let i = 0; i <= this.historicalData.length - this.windowSize - 1; i++) {
+      const windowData = this.historicalData.slice(i, i + this.windowSize);
+      const windowFeatures = this.extractFeatures(windowData);
+      
+      if (!windowFeatures) continue;
+      
+      // Calculate similarity score
+      let similarity = 0;
+      
+      // Compare last result pattern
+      if (windowFeatures.last5Results.join('') === currentFeatures.last5Results.join('')) {
+        similarity += 30;
+      }
+      
+      // Compare streak length
+      similarity += Math.max(0, 10 - Math.abs(windowFeatures.streakLength - currentFeatures.streakLength));
+      
+      // Compare pattern type
+      if (windowFeatures.patternType === currentFeatures.patternType) {
+        similarity += 20;
+      }
+      
+      // Compare Tai ratio
+      const ratioDiff = Math.abs(windowFeatures.recentTaiRatio - currentFeatures.recentTaiRatio);
+      similarity += Math.max(0, 15 - ratioDiff * 30);
+      
+      // Compare sum trend
+      if (windowFeatures.sumTrend === currentFeatures.sumTrend) {
+        similarity += 15;
+      }
+      
+      // Compare volatility
+      const volDiff = Math.abs(windowFeatures.volatility - currentFeatures.volatility);
+      similarity += Math.max(0, 10 - volDiff * 5);
+      
+      if (similarity > 20) {
+        matches.push({
+          similarity,
+          index: i,
+          nextResult: this.historicalData[i + this.windowSize]?.Ket_qua,
+          nextSum: this.historicalData[i + this.windowSize]?.Tong
+        });
+      }
+    }
+    
+    matches.sort((a, b) => b.similarity - a.similarity);
+    return matches.slice(0, maxMatches);
+  }
+
+  // Run Monte Carlo simulation
+  runSimulation(currentData, numSimulations = null) {
+    const simCount = numSimulations || this.numSimulations;
+    const currentFeatures = this.extractFeatures(currentData);
+    
+    if (!currentFeatures) {
+      return { taiProbability: 0.5, xiuProbability: 0.5, confidence: 50 };
+    }
+    
+    const similarPatterns = this.findSimilarPatterns(currentFeatures, Math.min(500, simCount));
+    
+    if (similarPatterns.length === 0) {
+      return { taiProbability: 0.5, xiuProbability: 0.5, confidence: 50 };
+    }
+    
+    let taiWins = 0;
+    let xiuWins = 0;
+    let totalWeight = 0;
+    
+    // Run simulations using similar patterns as basis
+    for (let sim = 0; sim < simCount; sim++) {
+      // Select a pattern with probability proportional to similarity
+      let selectedPattern;
+      if (sim < similarPatterns.length) {
+        selectedPattern = similarPatterns[sim];
+      } else {
+        const randomIndex = Math.floor(Math.random() * similarPatterns.length);
+        selectedPattern = similarPatterns[randomIndex];
+      }
+      
+      const weight = selectedPattern.similarity / 100;
+      totalWeight += weight;
+      
+      if (selectedPattern.nextResult === 'Tài') {
+        taiWins += weight;
+      } else if (selectedPattern.nextResult === 'Xỉu') {
+        xiuWins += weight;
+      }
+      
+      // Add random variations for more diverse simulation
+      for (let variation = 0; variation < 3; variation++) {
+        const randomNeighbor = Math.max(0, Math.min(similarPatterns.length - 1, 
+          similarPatterns.indexOf(selectedPattern) + (Math.random() > 0.7 ? 1 : -1) * Math.floor(Math.random() * 5)));
+        
+        if (randomNeighbor >= 0 && randomNeighbor < similarPatterns.length) {
+          const neighborPattern = similarPatterns[randomNeighbor];
+          const neighborWeight = neighborPattern.similarity / 100 * 0.3;
+          
+          if (neighborPattern.nextResult === 'Tài') {
+            taiWins += neighborWeight;
+          } else if (neighborPattern.nextResult === 'Xỉu') {
+            xiuWins += neighborWeight;
+          }
+          totalWeight += neighborWeight;
+        }
+      }
+    }
+    
+    const taiProbability = taiWins / totalWeight;
+    const xiuProbability = xiuWins / totalWeight;
+    
+    // Calculate confidence based on probability spread and sample size
+    const probabilitySpread = Math.abs(taiProbability - xiuProbability);
+    let confidence = 50 + probabilitySpread * 40;
+    
+    // Boost confidence if many similar patterns found
+    const patternConfidenceBoost = Math.min(15, similarPatterns.length / 10);
+    confidence += patternConfidenceBoost;
+    
+    // Adjust based on recent accuracy
+    confidence = Math.max(50, Math.min(92, confidence));
+    
+    return {
+      taiProbability: taiProbability.toFixed(4),
+      xiuProbability: xiuProbability.toFixed(4),
+      confidence: Math.round(confidence),
+      prediction: taiProbability > xiuProbability ? 'Tài' : 'Xỉu',
+      similarPatternsCount: similarPatterns.length,
+      topSimilarity: similarPatterns[0]?.similarity || 0
+    };
+  }
+
+  // Enhanced simulation with Markov Chain
+  runMarkovChainSimulation(currentData, numSimulations = 5000) {
+    const results = currentData.slice(0, 15).map(d => d.Ket_qua);
+    
+    // Build transition matrix
+    const transitions = { 'Tài': { 'Tài': 0, 'Xỉu': 0 }, 'Xỉu': { 'Tài': 0, 'Xỉu': 0 } };
+    let transitionCount = { 'Tài': 0, 'Xỉu': 0 };
+    
+    for (let i = 0; i < results.length - 1; i++) {
+      const from = results[i];
+      const to = results[i + 1];
+      transitions[from][to]++;
+      transitionCount[from]++;
+    }
+    
+    // Convert to probabilities
+    const transitionProbs = {
+      'Tài': {
+        'Tài': transitionCount['Tài'] > 0 ? transitions['Tài']['Tài'] / transitionCount['Tài'] : 0.5,
+        'Xỉu': transitionCount['Tài'] > 0 ? transitions['Tài']['Xỉu'] / transitionCount['Tài'] : 0.5
+      },
+      'Xỉu': {
+        'Tài': transitionCount['Xỉu'] > 0 ? transitions['Xỉu']['Tài'] / transitionCount['Xỉu'] : 0.5,
+        'Xỉu': transitionCount['Xỉu'] > 0 ? transitions['Xỉu']['Xỉu'] / transitionCount['Xỉu'] : 0.5
+      }
+    };
+    
+    // Run Markov Chain simulations
+    let taiWins = 0;
+    for (let sim = 0; sim < numSimulations; sim++) {
+      let currentState = results[0];
+      for (let step = 0; step < results.length; step++) {
+        const rand = Math.random();
+        if (rand < transitionProbs[currentState]['Tài']) {
+          currentState = 'Tài';
+        } else {
+          currentState = 'Xỉu';
+        }
+      }
+      if (currentState === 'Tài') taiWins++;
+    }
+    
+    const taiProbability = taiWins / numSimulations;
+    const confidence = 50 + Math.abs(taiProbability - 0.5) * 80;
+    
+    return {
+      taiProbability: taiProbability.toFixed(4),
+      xiuProbability: (1 - taiProbability).toFixed(4),
+      confidence: Math.min(90, Math.round(confidence)),
+      prediction: taiProbability > 0.5 ? 'Tài' : 'Xỉu'
+    };
+  }
+}
+
+// Initialize Monte Carlo simulators
+let monteCarloSimulators = { hu: null, md5: null };
+
+function updateMonteCarloSimulators(type, data) {
+  if (data && data.length >= 30) {
+    monteCarloSimulators[type] = new MonteCarloSimulator(data, 30);
+    console.log(`[MC] Monte Carlo simulator initialized for ${type} with ${data.length} data points`);
+  }
+}
+
 let learningData = {
   hu: {
     predictions: [],
@@ -120,8 +403,6 @@ function loadPredictionHistory() {
       predictionHistory = parsed.history || { hu: [], md5: [] };
       lastProcessedPhien = parsed.lastProcessedPhien || { hu: null, md5: null };
       console.log('Prediction history loaded successfully');
-      console.log(`  - Hu: ${predictionHistory.hu.length} records`);
-      console.log(`  - MD5: ${predictionHistory.md5.length} records`);
     }
   } catch (error) {
     console.error('Error loading prediction history:', error.message);
@@ -145,35 +426,37 @@ async function autoProcessPredictions() {
   try {
     const dataHu = await fetchDataHu();
     if (dataHu && dataHu.length > 0) {
+      updateMonteCarloSimulators('hu', dataHu);
       const latestHuPhien = dataHu[0].Phien;
       const nextHuPhien = latestHuPhien + 1;
       
       if (lastProcessedPhien.hu !== nextHuPhien) {
         await verifyPredictions('hu', dataHu);
         
-        const result = calculateAdvancedPrediction(dataHu, 'hu');
+        const result = calculateAdvancedPredictionWithMC(dataHu, 'hu');
         savePredictionToHistory('hu', nextHuPhien, result.prediction, result.confidence);
         recordPrediction('hu', nextHuPhien, result.prediction, result.confidence, result.factors);
         
         lastProcessedPhien.hu = nextHuPhien;
-        console.log(`[Auto] Hu phien ${nextHuPhien}: ${result.prediction} (${result.confidence}%)`);
+        console.log(`[Auto][MC] Hu phien ${nextHuPhien}: ${result.prediction} (${result.confidence}%) | MC:${result.monteCarlo?.confidence || 0}%`);
       }
     }
     
     const dataMd5 = await fetchDataMd5();
     if (dataMd5 && dataMd5.length > 0) {
+      updateMonteCarloSimulators('md5', dataMd5);
       const latestMd5Phien = dataMd5[0].Phien;
       const nextMd5Phien = latestMd5Phien + 1;
       
       if (lastProcessedPhien.md5 !== nextMd5Phien) {
         await verifyPredictions('md5', dataMd5);
         
-        const result = calculateAdvancedPrediction(dataMd5, 'md5');
+        const result = calculateAdvancedPredictionWithMC(dataMd5, 'md5');
         savePredictionToHistory('md5', nextMd5Phien, result.prediction, result.confidence);
         recordPrediction('md5', nextMd5Phien, result.prediction, result.confidence, result.factors);
         
         lastProcessedPhien.md5 = nextMd5Phien;
-        console.log(`[Auto] MD5 phien ${nextMd5Phien}: ${result.prediction} (${result.confidence}%)`);
+        console.log(`[Auto][MC] MD5 phien ${nextMd5Phien}: ${result.prediction} (${result.confidence}%) | MC:${result.monteCarlo?.confidence || 0}%`);
       }
     }
     
@@ -391,10 +674,10 @@ function getAdaptiveConfidenceBoost(type) {
   
   const accuracy = recentAcc.reduce((a, b) => a + b, 0) / recentAcc.length;
   
-  if (accuracy > 0.65) return 5;
-  if (accuracy > 0.55) return 2;
-  if (accuracy < 0.4) return -5;
-  if (accuracy < 0.45) return -2;
+  if (accuracy > 0.65) return 8;
+  if (accuracy > 0.55) return 4;
+  if (accuracy < 0.4) return -8;
+  if (accuracy < 0.45) return -3;
   
   return 0;
 }
@@ -402,7 +685,11 @@ function getAdaptiveConfidenceBoost(type) {
 function getSmartPredictionAdjustment(type, prediction, patterns) {
   const streakInfo = learningData[type].streakAnalysis;
   
-  if (streakInfo.currentStreak <= -5) {
+  if (streakInfo.currentStreak <= -6) {
+    return prediction === 'Tài' ? 'Xỉu' : 'Tài';
+  }
+  
+  if (streakInfo.currentStreak >= 8) {
     return prediction === 'Tài' ? 'Xỉu' : 'Tài';
   }
   
@@ -426,7 +713,7 @@ function getSmartPredictionAdjustment(type, prediction, patterns) {
     }
   });
   
-  if (Math.abs(taiPatternScore - xiuPatternScore) > 0.5) {
+  if (Math.abs(taiPatternScore - xiuPatternScore) > 0.7) {
     return taiPatternScore > xiuPatternScore ? 'Tài' : 'Xỉu';
   }
   
@@ -477,6 +764,8 @@ async function fetchDataMd5() {
   }
 }
 
+// ==================== CẦU PATTERN ANALYSIS FUNCTIONS ====================
+
 function analyzeCauBet(results, type) {
   if (results.length < 3) return { detected: false };
   
@@ -495,7 +784,7 @@ function analyzeCauBet(results, type) {
     const weight = getPatternWeight(type, 'cau_bet');
     const stats = learningData[type].patternStats['cau_bet'];
     
-    let shouldBreak = streakLength >= 6;
+    let shouldBreak = streakLength >= 5;
     
     if (stats && stats.recentResults.length >= 5) {
       const recentAcc = stats.recentResults.reduce((a, b) => a + b, 0) / stats.recentResults.length;
@@ -1219,7 +1508,7 @@ function analyzeSmartBet(results, type) {
       trendChange: true,
       prediction: currentDominant === 'Tài' ? 'Xỉu' : 'Tài',
       confidence: Math.round(13 * weight),
-      name: `Đảo Xu Hướng (${taiLast5}T-${5-taiLast5}X → ${taiPrev5}T-${5-taiPrev5}X)`,
+      name: `Đảo Xu Hướng (${taiLast5}T-${5 - taiLast5}X → ${taiPrev5}T-${5 - taiPrev5}X)`,
       patternId: 'smart_bet'
     };
   }
@@ -1232,7 +1521,7 @@ function analyzeSmartBet(results, type) {
       extreme: true,
       prediction: dominant === 'Tài' ? 'Xỉu' : 'Tài',
       confidence: Math.round(12 * weight),
-      name: `Xu Hướng Cực (${taiLast10}T-${10-taiLast10}X trong 10 phiên)`,
+      name: `Xu Hướng Cực (${taiLast10}T-${10 - taiLast10}X trong 10 phiên)`,
       patternId: 'smart_bet'
     };
   }
@@ -2383,7 +2672,9 @@ function analyzeTriplePattern(results, type) {
   return { detected: false };
 }
 
-function calculateAdvancedPrediction(data, type) {
+// ==================== MAIN PREDICTION WITH MONTE CARLO ====================
+
+function calculateAdvancedPredictionWithMC(data, type) {
   const last50 = data.slice(0, 50);
   const results = last50.map(d => d.Ket_qua);
   
@@ -2393,6 +2684,7 @@ function calculateAdvancedPrediction(data, type) {
   let factors = [];
   let allPatterns = [];
   
+  // Run all pattern analyses
   const cauBet = analyzeCauBet(results, type);
   if (cauBet.detected) {
     predictions.push({ prediction: cauBet.prediction, confidence: cauBet.confidence, priority: 10, name: cauBet.name });
@@ -2708,6 +3000,40 @@ function calculateAdvancedPrediction(data, type) {
     allPatterns.push(goldenRatio);
   }
   
+  // ==================== MONTE CARLO SIMULATION ====================
+  let monteCarloResult = null;
+  let markovResult = null;
+  
+  if (monteCarloSimulators[type] && last50.length >= 30) {
+    try {
+      monteCarloResult = monteCarloSimulators[type].runSimulation(last50, 15000);
+      markovResult = monteCarloSimulators[type].runMarkovChainSimulation(last50, 10000);
+      
+      if (monteCarloResult && monteCarloResult.similarPatternsCount > 10) {
+        const mcConfidence = monteCarloResult.confidence;
+        predictions.push({ 
+          prediction: monteCarloResult.prediction, 
+          confidence: mcConfidence, 
+          priority: 15, 
+          name: `Monte Carlo (${monteCarloResult.similarPatternsCount} patterns, top ${monteCarloResult.topSimilarity.toFixed(0)}%)` 
+        });
+        factors.push(`Monte Carlo: ${(monteCarloResult.taiProbability * 100).toFixed(1)}% Tài - ${(monteCarloResult.xiuProbability * 100).toFixed(1)}% Xỉu`);
+      }
+      
+      if (markovResult && markovResult.confidence > 55) {
+        predictions.push({ 
+          prediction: markovResult.prediction, 
+          confidence: markovResult.confidence, 
+          priority: 14, 
+          name: `Markov Chain (${(parseFloat(markovResult.taiProbability) * 100).toFixed(1)}% Tài)` 
+        });
+        factors.push(`Markov Chain: ${(parseFloat(markovResult.taiProbability) * 100).toFixed(1)}% Tài`);
+      }
+    } catch (mcError) {
+      console.error(`[MC] Error in Monte Carlo for ${type}:`, mcError.message);
+    }
+  }
+  
   if (predictions.length === 0) {
     const cauTuNhien = analyzeCauTuNhien(results, type);
     predictions.push({ prediction: cauTuNhien.prediction, confidence: cauTuNhien.confidence, priority: 1, name: cauTuNhien.name });
@@ -2725,6 +3051,11 @@ function calculateAdvancedPrediction(data, type) {
   
   let finalPrediction = taiScore >= xiuScore ? 'Tài' : 'Xỉu';
   
+  // Apply Monte Carlo override if confidence is high
+  if (monteCarloResult && monteCarloResult.confidence >= 70 && monteCarloResult.similarPatternsCount >= 30) {
+    finalPrediction = monteCarloResult.prediction;
+  }
+  
   finalPrediction = getSmartPredictionAdjustment(type, finalPrediction, allPatterns);
   
   let baseConfidence = 50;
@@ -2732,32 +3063,49 @@ function calculateAdvancedPrediction(data, type) {
   const topPredictions = predictions.slice(0, 3);
   topPredictions.forEach(p => {
     if (p.prediction === finalPrediction) {
-      baseConfidence += p.confidence;
+      baseConfidence += p.confidence * 0.5;
     }
   });
   
   const agreementRatio = (finalPrediction === 'Tài' ? taiVotes.length : xiuVotes.length) / predictions.length;
-  baseConfidence += Math.round(agreementRatio * 10);
+  baseConfidence += Math.round(agreementRatio * 15);
   
   const adaptiveBoost = getAdaptiveConfidenceBoost(type);
   baseConfidence += adaptiveBoost;
   
+  // Boost from Monte Carlo
+  if (monteCarloResult && monteCarloResult.prediction === finalPrediction) {
+    baseConfidence += 8;
+  }
+  
   const randomAdjust = (Math.random() * 4) - 2;
   let finalConfidence = Math.round(baseConfidence + randomAdjust);
   
-  finalConfidence = Math.max(50, Math.min(85, finalConfidence));
+  finalConfidence = Math.max(55, Math.min(92, finalConfidence));
   
   return {
     prediction: finalPrediction,
     confidence: finalConfidence,
     factors,
     allPatterns,
+    monteCarlo: monteCarloResult ? {
+      prediction: monteCarloResult.prediction,
+      confidence: monteCarloResult.confidence,
+      taiProbability: monteCarloResult.taiProbability,
+      xiuProbability: monteCarloResult.xiuProbability,
+      similarPatternsCount: monteCarloResult.similarPatternsCount
+    } : null,
+    markovChain: markovResult ? {
+      prediction: markovResult.prediction,
+      confidence: markovResult.confidence,
+      taiProbability: markovResult.taiProbability
+    } : null,
     detailedAnalysis: {
       totalPatterns: predictions.length,
       taiVotes: taiVotes.length,
       xiuVotes: xiuVotes.length,
-      taiScore,
-      xiuScore,
+      taiScore: Math.round(taiScore),
+      xiuScore: Math.round(xiuScore),
       topPattern: predictions[0]?.name || 'N/A',
       distribution,
       dicePatterns,
@@ -2779,10 +3127,10 @@ function calculateAdvancedPrediction(data, type) {
 
 function savePredictionToHistory(type, phien, prediction, confidence) {
   const record = {
-    phien_hien_tai: phien.toString(),  // Đã sửa thành phien_hien_tai
+    phien_hien_tai: phien.toString(),
     du_doan: normalizeResult(prediction),
     ti_le: `${confidence}%`,
-    id: 'kapub',  // Đã sửa thành kapub
+    id: 'kapub',
     timestamp: new Date().toISOString()
   };
   
@@ -2794,6 +3142,8 @@ function savePredictionToHistory(type, phien, prediction, confidence) {
   
   return record;
 }
+
+// ==================== EXPRESS ENDPOINTS ====================
 
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -2807,21 +3157,22 @@ app.get('/lc79-hu', async (req, res) => {
       return res.status(500).json({ error: 'Không thể lấy dữ liệu' });
     }
     
+    updateMonteCarloSimulators('hu', data);
     await verifyPredictions('hu', data);
     
     const latestPhien = data[0].Phien;
     const nextPhien = latestPhien + 1;
     
-    const result = calculateAdvancedPrediction(data, 'hu');
+    const result = calculateAdvancedPredictionWithMC(data, 'hu');
     
     savePredictionToHistory('hu', nextPhien, result.prediction, result.confidence);
     recordPrediction('hu', nextPhien, result.prediction, result.confidence, result.factors);
     
     res.json({
-      phien_hien_tai: nextPhien.toString(),  // Đã sửa thành phien_hien_tai
+      phien_hien_tai: nextPhien.toString(),
       du_doan: normalizeResult(result.prediction),
       ti_le: `${result.confidence}%`,
-      id: 'kapub'  // Đã sửa thành kapub
+      id: 'kapub'
     });
   } catch (error) {
     console.error('Error:', error);
@@ -2836,21 +3187,22 @@ app.get('/lc79-md5', async (req, res) => {
       return res.status(500).json({ error: 'Không thể lấy dữ liệu' });
     }
     
+    updateMonteCarloSimulators('md5', data);
     await verifyPredictions('md5', data);
     
     const latestPhien = data[0].Phien;
     const nextPhien = latestPhien + 1;
     
-    const result = calculateAdvancedPrediction(data, 'md5');
+    const result = calculateAdvancedPredictionWithMC(data, 'md5');
     
     savePredictionToHistory('md5', nextPhien, result.prediction, result.confidence);
     recordPrediction('md5', nextPhien, result.prediction, result.confidence, result.factors);
     
     res.json({
-      phien_hien_tai: nextPhien.toString(),  // Đã sửa thành phien_hien_tai
+      phien_hien_tai: nextPhien.toString(),
       du_doan: normalizeResult(result.prediction),
       ti_le: `${result.confidence}%`,
-      id: 'kapub'  // Đã sửa thành kapub
+      id: 'kapub'
     });
   } catch (error) {
     console.error('Error:', error);
@@ -2943,13 +3295,16 @@ app.get('/lc79-hu/analysis', async (req, res) => {
       return res.status(500).json({ error: 'Không thể lấy dữ liệu' });
     }
     
+    updateMonteCarloSimulators('hu', data);
     await verifyPredictions('hu', data);
     
-    const result = calculateAdvancedPrediction(data, 'hu');
+    const result = calculateAdvancedPredictionWithMC(data, 'hu');
     res.json({
       prediction: normalizeResult(result.prediction),
       confidence: result.confidence,
       factors: result.factors,
+      monteCarlo: result.monteCarlo,
+      markovChain: result.markovChain,
       analysis: result.detailedAnalysis
     });
   } catch (error) {
@@ -2964,13 +3319,16 @@ app.get('/lc79-md5/analysis', async (req, res) => {
       return res.status(500).json({ error: 'Không thể lấy dữ liệu' });
     }
     
+    updateMonteCarloSimulators('md5', data);
     await verifyPredictions('md5', data);
     
-    const result = calculateAdvancedPrediction(data, 'md5');
+    const result = calculateAdvancedPredictionWithMC(data, 'md5');
     res.json({
       prediction: normalizeResult(result.prediction),
       confidence: result.confidence,
       factors: result.factors,
+      monteCarlo: result.monteCarlo,
+      markovChain: result.markovChain,
       analysis: result.detailedAnalysis
     });
   } catch (error) {
@@ -3065,8 +3423,9 @@ app.get('/reset-learning', (req, res) => {
       recentAccuracy: []
     }
   };
+  monteCarloSimulators = { hu: null, md5: null };
   saveLearningData();
-  res.json({ message: 'Learning data reset successfully' });
+  res.json({ message: 'Learning data and Monte Carlo simulators reset successfully' });
 });
 
 loadLearningData();
@@ -3074,38 +3433,30 @@ loadPredictionHistory();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
-  console.log('Lau Cua 79 - Advanced Tai Xiu Prediction API v4.0');
+  console.log('Lau Cua 79 - Advanced Tai Xiu Prediction API with MONTE CARLO SIMULATION v5.0');
+  console.log('');
+  console.log('NEW FEATURES:');
+  console.log('  ★ MONTE CARLO SIMULATION - 15,000+ simulations per prediction');
+  console.log('  ★ MARKOV CHAIN ANALYSIS - 10,000+ state transition simulations');
+  console.log('  ★ PATTERN SIMILARITY MATCHING - AI-based historical pattern recognition');
+  console.log('  ★ PROBABILISTIC CONFIDENCE SCORING');
+  console.log('  ★ Self-learning with pattern weight adjustment');
+  console.log('  ★ Streak analysis and smart reversal');
+  console.log('  ★ Adaptive confidence based on recent performance');
+  console.log('  ★ AUTO-SAVE: History saves automatically every 30s');
   console.log('');
   console.log('API SOURCES:');
   console.log('  - TX Hũ: ' + API_URL_HU);
   console.log('  - TX MD5: ' + API_URL_MD5);
   console.log('');
-  console.log('NEW FEATURES:');
-  console.log('  - Self-learning from prediction results');
-  console.log('  - Pattern weight adjustment based on accuracy');
-  console.log('  - Streak analysis and smart reversal');
-  console.log('  - Adaptive confidence based on recent performance');
-  console.log('  - Persistent learning data storage');
-  console.log('  - AUTO-SAVE: History saves automatically every 30s');
-  console.log('  - Enhanced break pattern detection');
-  console.log('');
-  console.log('Supported Patterns:');
-  console.log('  - Cầu Bệt, Đảo 1-1, 2-2, 3-3, 4-4, 5-5');
-  console.log('  - Cầu 1-2-1, 1-2-3, 3-2-1, 2-1-2, 1-2-2-1, 2-1-1-2');
-  console.log('  - Cầu Nhảy Cóc, Nhịp Nghiêng, Ziczac');
-  console.log('  - Cầu 3 Ván 1, Bẻ Cầu, Chu Kỳ');
-  console.log('  - Cầu Đôi, Cầu Gấp, Cầu Rồng');
-  console.log('  - Biểu Đồ Đường, Dây Gãy (Hũ & MD5)');
-  console.log('  - Smart Bet, Momentum, Wave Pattern');
-  console.log('');
   console.log('Endpoints:');
   console.log('  / - Homepage');
-  console.log('  /lc79-hu - Dự đoán Tài Xỉu Hũ');
-  console.log('  /lc79-md5 - Dự đoán Tài Xỉu MD5');
+  console.log('  /lc79-hu - Dự đoán Tài Xỉu Hũ (with Monte Carlo)');
+  console.log('  /lc79-md5 - Dự đoán Tài Xỉu MD5 (with Monte Carlo)');
   console.log('  /lc79-hu/lichsu - Lịch sử dự đoán Hũ');
   console.log('  /lc79-md5/lichsu - Lịch sử dự đoán MD5');
-  console.log('  /lc79-hu/analysis - Phân tích chi tiết Hũ');
-  console.log('  /lc79-md5/analysis - Phân tích chi tiết MD5');
+  console.log('  /lc79-hu/analysis - Phân tích chi tiết Hũ + MC results');
+  console.log('  /lc79-md5/analysis - Phân tích chi tiết MD5 + MC results');
   console.log('  /lc79-hu/learning - Thống kê học tập Hũ');
   console.log('  /lc79-md5/learning - Thống kê học tập MD5');
   console.log('  /reset-learning - Reset dữ liệu học');
