@@ -24,6 +24,460 @@ let lastProcessedPhien = { hu: null, md5: null };
 let dataCache = { hu: null, md5: null, lastFetch: { hu: 0, md5: 0 } };
 const CACHE_TTL = 5000;
 
+// ==================== THƯ VIỆN TOÁN HỌC NÂNG CAO ====================
+
+// 1. GIAI THỪA (FACTORIAL)
+function factorial(n) {
+    if (n <= 1) return 1;
+    let result = 1;
+    for (let i = 2; i <= n; i++) result *= i;
+    return result;
+}
+
+// 2. TỔ HỢP (COMBINATION)
+function combination(n, k) {
+    if (k < 0 || k > n) return 0;
+    return factorial(n) / (factorial(k) * factorial(n - k));
+}
+
+// 3. PHÂN PHỐI NHỊ PHÂN (BINOMIAL DISTRIBUTION)
+function binomialProbability(n, k, p) {
+    return combination(n, k) * Math.pow(p, k) * Math.pow(1 - p, n - k);
+}
+
+// 4. PHÂN PHỐI POISSON
+function poissonProbability(lambda, k) {
+    return Math.pow(lambda, k) * Math.exp(-lambda) / factorial(k);
+}
+
+// 5. HÀM PHÂN PHỐI CHUẨN TÍCH LŨY (CDF)
+function normalCDF(x, mean = 0, std = 1) {
+    const z = (x - mean) / std;
+    const t = 1 / (1 + 0.2316419 * Math.abs(z));
+    const d = 0.3989423 * Math.exp(-z * z / 2);
+    const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    return z > 0 ? 1 - p : p;
+}
+
+// 6. HỆ SỐ TƯƠNG QUAN PEARSON
+function pearsonCorrelation(x, y) {
+    if (x.length !== y.length || x.length < 2) return 0;
+    const n = x.length;
+    const sumX = x.reduce((a, b) => a + b, 0);
+    const sumY = y.reduce((a, b) => a + b, 0);
+    const sumX2 = x.reduce((a, b) => a + b * b, 0);
+    const sumY2 = y.reduce((a, b) => a + b * b, 0);
+    const sumXY = x.reduce((a, b, i) => a + b * y[i], 0);
+    
+    const numerator = sumXY - sumX * sumY / n;
+    const denominator = Math.sqrt((sumX2 - sumX * sumX / n) * (sumY2 - sumY * sumY / n));
+    return denominator === 0 ? 0 : numerator / denominator;
+}
+
+// 7. PHÂN PHỐI CHI-SQUARE
+function chiSquareTest(observed, expected) {
+    let chi2 = 0;
+    for (let i = 0; i < observed.length; i++) {
+        if (expected[i] > 0) {
+            chi2 += Math.pow(observed[i] - expected[i], 2) / expected[i];
+        }
+    }
+    return chi2;
+}
+
+// 8. KHOẢNG TIN CẬY BINOMIAL (WILSON SCORE)
+function wilsonScoreInterval(phat, n, confidence = 0.95) {
+    const z = 1.96; // 95% confidence
+    const denominator = 1 + z * z / n;
+    const center = phat + z * z / (2 * n);
+    const halfWidth = z * Math.sqrt(phat * (1 - phat) / n + z * z / (4 * n * n));
+    return {
+        lower: Math.max(0, (center - halfWidth) / denominator),
+        upper: Math.min(1, (center + halfWidth) / denominator)
+    };
+}
+
+// 9. PHÂN TÍCH PHƯƠNG SAI (ANOVA)
+function anovaTest(groups) {
+    const allData = groups.flat();
+    const grandMean = allData.reduce((a, b) => a + b, 0) / allData.length;
+    
+    let ssBetween = 0;
+    let ssWithin = 0;
+    let dfBetween = groups.length - 1;
+    let dfWithin = allData.length - groups.length;
+    
+    for (const group of groups) {
+        const groupMean = group.reduce((a, b) => a + b, 0) / group.length;
+        ssBetween += group.length * Math.pow(groupMean - grandMean, 2);
+        ssWithin += group.reduce((a, b) => a + Math.pow(b - groupMean, 2), 0);
+    }
+    
+    const msBetween = ssBetween / dfBetween;
+    const msWithin = ssWithin / dfWithin;
+    const fStatistic = msBetween / msWithin;
+    
+    return { fStatistic, dfBetween, dfWithin };
+}
+
+// 10. BINOMIAL TEST (KIỂM ĐỊNH NHỊ PHÂN)
+function binomialTest(successes, trials, p = 0.5) {
+    let pValue = 0;
+    for (let k = successes; k <= trials; k++) {
+        pValue += binomialProbability(trials, k, p);
+    }
+    if (pValue > 0.5) pValue = 1 - pValue;
+    return pValue * 2; // two-tailed
+}
+
+// ==================== KALMAN FILTER (LỌC NHIỄU THỜI GIAN THỰC) ====================
+class KalmanFilter {
+    constructor() {
+        this.x = 0.5;      // state (xác suất)
+        this.P = 0.1;      // error covariance
+        this.Q = 0.05;     // process noise
+        this.R = 0.1;      // measurement noise
+    }
+    
+    predict() {
+        this.P += this.Q;
+    }
+    
+    update(measurement) {
+        this.predict();
+        const K = this.P / (this.P + this.R);  // Kalman gain
+        this.x = this.x + K * (measurement - this.x);
+        this.P = (1 - K) * this.P;
+        return this.x;
+    }
+    
+    reset() {
+        this.x = 0.5;
+        this.P = 0.1;
+    }
+}
+
+// ==================== KELLY CRITERION (QUẢN LÝ VỐN TỐI ƯU) ====================
+class KellyCriterion {
+    static calculate(winProbability, odds = 1.98) {
+        // f* = (p * b - q) / b
+        const b = odds - 1;
+        const p = winProbability;
+        const q = 1 - p;
+        const fStar = (p * b - q) / b;
+        return Math.max(0, Math.min(0.25, fStar)); // Giới hạn 25% bankroll
+    }
+    
+    static fractionalKelly(winProbability, fraction = 0.5) {
+        return this.calculate(winProbability) * fraction;
+    }
+}
+
+// ==================== BOOTSTRAPPING (ƯỚC LƯỢNG KHOẢNG TIN CẬY) ====================
+class BootstrapAnalyzer {
+    static confidenceInterval(data, nBootstraps = 1000, confidence = 0.95) {
+        const estimates = [];
+        for (let i = 0; i < nBootstraps; i++) {
+            const sample = [];
+            for (let j = 0; j < data.length; j++) {
+                const idx = Math.floor(Math.random() * data.length);
+                sample.push(data[idx]);
+            }
+            const mean = sample.reduce((a, b) => a + b, 0) / sample.length;
+            estimates.push(mean);
+        }
+        estimates.sort((a, b) => a - b);
+        const lowerIdx = Math.floor(nBootstraps * (1 - confidence) / 2);
+        const upperIdx = Math.floor(nBootstraps * (1 + confidence) / 2);
+        return {
+            lower: estimates[lowerIdx],
+            upper: estimates[upperIdx],
+            mean: estimates.reduce((a, b) => a + b, 0) / nBootstraps,
+            stdDev: Math.sqrt(estimates.reduce((a, b) => a + Math.pow(b - estimates.reduce((c, d) => c + d, 0) / nBootstraps, 2), 0) / nBootstraps)
+        };
+    }
+}
+
+// ==================== LINEAR REGRESSION (HỒI QUY TUYẾN TÍNH) ====================
+class LinearRegression {
+    constructor() {
+        this.slope = 0;
+        this.intercept = 0;
+        this.r2 = 0;
+    }
+    
+    fit(x, y) {
+        const n = x.length;
+        const sumX = x.reduce((a, b) => a + b, 0);
+        const sumY = y.reduce((a, b) => a + b, 0);
+        const sumX2 = x.reduce((a, b) => a + b * b, 0);
+        const sumXY = x.reduce((a, b, i) => a + b * y[i], 0);
+        
+        this.slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+        this.intercept = (sumY - this.slope * sumX) / n;
+        
+        // Calculate R-squared
+        const yMean = sumY / n;
+        const ssTot = y.reduce((a, b) => a + Math.pow(b - yMean, 2), 0);
+        const ssRes = y.reduce((a, b, i) => a + Math.pow(b - (this.slope * x[i] + this.intercept), 2), 0);
+        this.r2 = 1 - (ssRes / ssTot);
+        
+        return this;
+    }
+    
+    predict(x) {
+        return this.slope * x + this.intercept;
+    }
+    
+    getTrend() {
+        return this.slope > 0.05 ? 'up' : (this.slope < -0.05 ? 'down' : 'stable');
+    }
+}
+
+// ==================== HIDDEN MARKOV MODEL (HMM) ====================
+class HiddenMarkovModel {
+    constructor(numStates = 2, numObservations = 2) {
+        this.numStates = numStates;  // Tài/Xỉu ẩn
+        this.numObservations = numObservations;  // Tài/Xỉu quan sát
+        this.transitionProb = [
+            [0.7, 0.3],  // Tài -> Tài, Tài -> Xỉu
+            [0.3, 0.7]   // Xỉu -> Tài, Xỉu -> Xỉu
+        ];
+        this.emissionProb = [
+            [0.9, 0.1],  // Tài ẩn -> Tài quan sát, Tài ẩn -> Xỉu quan sát
+            [0.1, 0.9]   // Xỉu ẩn -> Tài quan sát, Xỉu ẩn -> Xỉu quan sát
+        ];
+        this.initialProb = [0.5, 0.5];
+        this.learnedTransitions = [];
+    }
+    
+    // Forward algorithm
+    forward(observations) {
+        const T = observations.length;
+        const alpha = Array(T).fill().map(() => Array(this.numStates).fill(0));
+        
+        // Initialize
+        for (let s = 0; s < this.numStates; s++) {
+            alpha[0][s] = this.initialProb[s] * this.emissionProb[s][observations[0]];
+        }
+        
+        // Recursion
+        for (let t = 1; t < T; t++) {
+            for (let s = 0; s < this.numStates; s++) {
+                let sum = 0;
+                for (let prev = 0; prev < this.numStates; prev++) {
+                    sum += alpha[t-1][prev] * this.transitionProb[prev][s];
+                }
+                alpha[t][s] = sum * this.emissionProb[s][observations[t]];
+            }
+        }
+        
+        return alpha;
+    }
+    
+    // Viterbi algorithm for most likely state sequence
+    viterbi(observations) {
+        const T = observations.length;
+        const viterbi = Array(T).fill().map(() => Array(this.numStates).fill(0));
+        const backpointer = Array(T).fill().map(() => Array(this.numStates).fill(0));
+        
+        // Initialize
+        for (let s = 0; s < this.numStates; s++) {
+            viterbi[0][s] = this.initialProb[s] * this.emissionProb[s][observations[0]];
+            backpointer[0][s] = 0;
+        }
+        
+        // Recursion
+        for (let t = 1; t < T; t++) {
+            for (let s = 0; s < this.numStates; s++) {
+                let maxProb = 0;
+                let maxState = 0;
+                for (let prev = 0; prev < this.numStates; prev++) {
+                    const prob = viterbi[t-1][prev] * this.transitionProb[prev][s];
+                    if (prob > maxProb) {
+                        maxProb = prob;
+                        maxState = prev;
+                    }
+                }
+                viterbi[t][s] = maxProb * this.emissionProb[s][observations[t]];
+                backpointer[t][s] = maxState;
+            }
+        }
+        
+        // Termination and path backtracking
+        let bestProb = 0;
+        let bestState = 0;
+        for (let s = 0; s < this.numStates; s++) {
+            if (viterbi[T-1][s] > bestProb) {
+                bestProb = viterbi[T-1][s];
+                bestState = s;
+            }
+        }
+        
+        const bestPath = Array(T).fill(0);
+        bestPath[T-1] = bestState;
+        for (let t = T-2; t >= 0; t--) {
+            bestPath[t] = backpointer[t+1][bestPath[t+1]];
+        }
+        
+        return bestPath;
+    }
+    
+    // Baum-Welch algorithm for learning parameters
+    baumWelch(observations, maxIterations = 100) {
+        let observationsMatrix = observations.map(o => [o]);
+        let oldLogProb = -Infinity;
+        
+        for (let iter = 0; iter < maxIterations; iter++) {
+            // Forward-backward
+            const alpha = this.forward(observations);
+            const beta = this.backward(observations);
+            
+            // Compute gamma and xi
+            const gamma = this.computeGamma(alpha, beta);
+            const xi = this.computeXi(alpha, beta, observations);
+            
+            // Update parameters
+            this.updateParameters(gamma, xi, observations);
+            
+            // Check convergence
+            const logProb = Math.log(alpha[alpha.length-1].reduce((a, b) => a + b, 0));
+            if (Math.abs(logProb - oldLogProb) < 1e-4) break;
+            oldLogProb = logProb;
+        }
+    }
+    
+    backward(observations) {
+        const T = observations.length;
+        const beta = Array(T).fill().map(() => Array(this.numStates).fill(0));
+        
+        for (let s = 0; s < this.numStates; s++) {
+            beta[T-1][s] = 1;
+        }
+        
+        for (let t = T-2; t >= 0; t--) {
+            for (let s = 0; s < this.numStates; s++) {
+                let sum = 0;
+                for (let next = 0; next < this.numStates; next++) {
+                    sum += this.transitionProb[s][next] * this.emissionProb[next][observations[t+1]] * beta[t+1][next];
+                }
+                beta[t][s] = sum;
+            }
+        }
+        
+        return beta;
+    }
+    
+    computeGamma(alpha, beta) {
+        const T = alpha.length;
+        const gamma = Array(T).fill().map(() => Array(this.numStates).fill(0));
+        
+        for (let t = 0; t < T; t++) {
+            let total = 0;
+            for (let s = 0; s < this.numStates; s++) {
+                gamma[t][s] = alpha[t][s] * beta[t][s];
+                total += gamma[t][s];
+            }
+            if (total > 0) {
+                for (let s = 0; s < this.numStates; s++) {
+                    gamma[t][s] /= total;
+                }
+            }
+        }
+        
+        return gamma;
+    }
+    
+    computeXi(alpha, beta, observations) {
+        const T = alpha.length;
+        const xi = Array(T-1).fill().map(() => Array(this.numStates).fill().map(() => Array(this.numStates).fill(0)));
+        
+        for (let t = 0; t < T-1; t++) {
+            let total = 0;
+            for (let i = 0; i < this.numStates; i++) {
+                for (let j = 0; j < this.numStates; j++) {
+                    xi[t][i][j] = alpha[t][i] * this.transitionProb[i][j] * this.emissionProb[j][observations[t+1]] * beta[t+1][j];
+                    total += xi[t][i][j];
+                }
+            }
+            if (total > 0) {
+                for (let i = 0; i < this.numStates; i++) {
+                    for (let j = 0; j < this.numStates; j++) {
+                        xi[t][i][j] /= total;
+                    }
+                }
+            }
+        }
+        
+        return xi;
+    }
+    
+    updateParameters(gamma, xi, observations) {
+        // Update initial probabilities
+        for (let i = 0; i < this.numStates; i++) {
+            this.initialProb[i] = gamma[0][i];
+        }
+        
+        // Update transition probabilities
+        for (let i = 0; i < this.numStates; i++) {
+            let denominator = 0;
+            for (let t = 0; t < gamma.length - 1; t++) {
+                denominator += gamma[t][i];
+            }
+            for (let j = 0; j < this.numStates; j++) {
+                let numerator = 0;
+                for (let t = 0; t < xi.length; t++) {
+                    numerator += xi[t][i][j];
+                }
+                this.transitionProb[i][j] = denominator > 0 ? numerator / denominator : 1 / this.numStates;
+            }
+        }
+        
+        // Update emission probabilities
+        for (let j = 0; j < this.numStates; j++) {
+            let denominator = 0;
+            for (let t = 0; t < gamma.length; t++) {
+                denominator += gamma[t][j];
+            }
+            for (let k = 0; k < this.numObservations; k++) {
+                let numerator = 0;
+                for (let t = 0; t < gamma.length; t++) {
+                    if (observations[t] === k) {
+                        numerator += gamma[t][j];
+                    }
+                }
+                this.emissionProb[j][k] = denominator > 0 ? numerator / denominator : 1 / this.numObservations;
+            }
+        }
+    }
+    
+    predict(observations) {
+        if (observations.length === 0) return { prediction: 'Tài', probability: 0.5 };
+        
+        const obs = observations.map(o => o === 'Tài' ? 0 : 1);
+        const alpha = this.forward(obs);
+        const T = obs.length;
+        
+        let nextProb_Tai = 0;
+        let nextProb_Xiu = 0;
+        
+        for (let s = 0; s < this.numStates; s++) {
+            const currentProb = alpha[T-1][s];
+            nextProb_Tai += currentProb * this.transitionProb[s][0];
+            nextProb_Xiu += currentProb * this.transitionProb[s][1];
+        }
+        
+        const total = nextProb_Tai + nextProb_Xiu;
+        const probTai = total > 0 ? nextProb_Tai / total : 0.5;
+        
+        return {
+            prediction: probTai > 0.5 ? 'Tài' : 'Xỉu',
+            probability: probTai,
+            confidence: 50 + Math.abs(probTai - 0.5) * 80
+        };
+    }
+}
+
 // ==================== META LEARNING ENGINE ====================
 class MetaLearner {
   constructor() {
@@ -37,7 +491,10 @@ class MetaLearner {
       timeWindow: 1.0,
       trendReversal: 1.0,
       markovChain: 1.0,
-      neuralNet: 1.0
+      neuralNet: 1.0,
+      hmm: 1.0,
+      kalman: 1.0,
+      kelly: 1.0
     };
     this.performanceHistory = {};
     this.adaptationRate = 0.05;
@@ -995,7 +1452,7 @@ let learningData = {
   md5: { predictions: [], totalPredictions: 0, correctPredictions: 0, recentAccuracy: [], streakAnalysis: { currentStreak: 0, bestStreak: 0, worstStreak: 0 }, lastUpdate: null }
 };
 
-// Khởi tạo các engine
+// Khởi tạo các engine nâng cao
 let monteCarloSimulators = { hu: null, md5: null };
 let anomalyDetector = new AnomalyDetector();
 let metaLearner = new MetaLearner();
@@ -1007,6 +1464,72 @@ let trendReversalDetector = new TrendReversalDetector();
 let markovChain = new MarkovChainPredictor(2);
 let neuralNet = new SimpleNeuralNet();
 let ensembleVoter = new EnsembleVoter();
+
+// Các engine thống kê nâng cao mới
+let kalmanFilter = new KalmanFilter();
+let hmmModel = new HiddenMarkovModel(2, 2);
+let linearRegression = new LinearRegression();
+let bootstrapAnalyzer = new BootstrapAnalyzer();
+
+// ==================== STATISTICAL ANALYZER NÂNG CAO ====================
+class StatisticalAnalyzer {
+    constructor() {
+        this.history = [];
+    }
+    
+    addResult(result) {
+        this.history.push(result === 'Tài' ? 1 : 0);
+        if (this.history.length > 200) this.history.shift();
+    }
+    
+    // Kiểm định binomial cho tính ngẫu nhiên
+    testRandomness() {
+        if (this.history.length < 30) return { isRandom: true, pValue: 0.5 };
+        const successes = this.history.reduce((a, b) => a + b, 0);
+        const pValue = binomialTest(successes, this.history.length);
+        return {
+            isRandom: pValue > 0.05,
+            pValue: pValue,
+            deviation: Math.abs(successes / this.history.length - 0.5)
+        };
+    }
+    
+    // Phân tích xu hướng với Linear Regression
+    analyzeTrend() {
+        if (this.history.length < 10) return { trend: 'unknown', slope: 0, r2: 0 };
+        const x = Array.from({ length: this.history.length }, (_, i) => i);
+        const y = this.history;
+        const regression = linearRegression.fit(x, y);
+        return {
+            trend: regression.getTrend(),
+            slope: regression.slope,
+            r2: regression.r2,
+            confidence: Math.abs(regression.slope) * 100
+        };
+    }
+    
+    // Bootstrap confidence interval cho tỷ lệ Tài
+    getTaiRatioCI(confidence = 0.95) {
+        if (this.history.length < 10) return { lower: 0.4, upper: 0.6, mean: 0.5 };
+        const ci = bootstrapAnalyzer.confidenceInterval(this.history, 1000, confidence);
+        return ci;
+    }
+    
+    // Kiểm định Chi-square cho phân phối
+    testDistribution() {
+        if (this.history.length < 20) return { isUniform: true, chi2: 0 };
+        const observed = [
+            this.history.filter(v => v === 1).length,
+            this.history.filter(v => v === 0).length
+        ];
+        const expected = [this.history.length / 2, this.history.length / 2];
+        const chi2 = chiSquareTest(observed, expected);
+        return {
+            isUniform: chi2 < 3.841, // 95% confidence with 1 df
+            chi2: chi2
+        };
+    }
+}
 
 // ==================== SETUP FULL ENSEMBLE ====================
 function setupFullEnsemble() {
@@ -1119,9 +1642,47 @@ function setupFullEnsemble() {
     return neuralNet.predict(results, sums);
   }, metaLearner.getWeight('neuralNet'));
   
-  console.log('\n✅ ENSEMBLE CONFIGURED WITH 10 ALGORITHMS');
+  // 11. HIDDEN MARKOV MODEL (MỚI)
+  ensembleVoter.addVoter('HMM', (data, ctx) => {
+    const results = data.slice(0, 15).map(d => d.Ket_qua);
+    if (learningData[ctx.type].predictions.length > 20) {
+      const recentActuals = learningData[ctx.type].predictions.filter(p => p.verified).slice(0, 50).map(p => p.actual);
+      if (recentActuals.length > 20) {
+        const obs = recentActuals.map(r => r === 'Tài' ? 0 : 1);
+        hmmModel.baumWelch(obs, 20);
+      }
+    }
+    return hmmModel.predict(results);
+  }, metaLearner.getWeight('hmm'));
+  
+  // 12. KALMAN FILTER (MỚI)
+  ensembleVoter.addVoter('Kalman', (data, ctx) => {
+    const results = data.slice(0, 10).map(d => d.Ket_qua);
+    const taiRatio = results.filter(r => r === 'Tài').length / results.length;
+    const filtered = kalmanFilter.update(taiRatio);
+    return {
+      prediction: filtered > 0.5 ? 'Tài' : 'Xỉu',
+      confidence: 50 + Math.abs(filtered - 0.5) * 60,
+      probability: filtered
+    };
+  }, metaLearner.getWeight('kalman'));
+  
+  // 13. KELLY CRITERION (MỚI)
+  ensembleVoter.addVoter('Kelly', (data, ctx) => {
+    const results = data.slice(0, 20).map(d => d.Ket_qua);
+    const taiRatio = results.filter(r => r === 'Tài').length / results.length;
+    const kellyFraction = KellyCriterion.calculate(taiRatio);
+    return {
+      prediction: taiRatio > 0.5 ? 'Tài' : 'Xỉu',
+      confidence: 50 + kellyFraction * 100,
+      kellyFraction: kellyFraction
+    };
+  }, metaLearner.getWeight('kelly'));
+  
+  console.log('\n✅ ENSEMBLE CONFIGURED WITH 13 ALGORITHMS');
   console.log('   1. Monte Carlo    2. LSTM          3. Fuzzy Logic    4. Bayesian       5. Pattern Match');
-  console.log('   6. Anomaly Break  7. Time Window   8. Trend Reversal 9. Markov Chain   10. Neural Network\n');
+  console.log('   6. Anomaly Break  7. Time Window   8. Trend Reversal 9. Markov Chain   10. Neural Network');
+  console.log('   11. HMM (Hidden Markov)  12. Kalman Filter       13. Kelly Criterion\n');
 }
 
 // ==================== HELPER FUNCTIONS ====================
@@ -1244,20 +1805,30 @@ async function verifyPredictions(type, currentData) {
       learningData[type].recentAccuracy.push(pred.isCorrect ? 1 : 0);
       if (learningData[type].recentAccuracy.length > 50) learningData[type].recentAccuracy.shift();
       
-      // Update meta learning
+      // Update meta learning với tất cả algorithms
       const factors = pred.factors || [];
+      const algorithmMap = {
+        'MonteCarlo': 'monteCarlo', 'LSTM': 'lstm', 'FuzzyLogic': 'fuzzyLogic',
+        'Bayesian': 'bayesian', 'PatternMatch': 'patternMatch', 'AnomalyBreak': 'anomalyBreak',
+        'TimeWindow': 'timeWindow', 'TrendReversal': 'trendReversal', 'MarkovChain': 'markovChain',
+        'NeuralNet': 'neuralNet', 'HMM': 'hmm', 'Kalman': 'kalman', 'Kelly': 'kelly'
+      };
       for (const factor of factors) {
-        if (factor.includes('MonteCarlo')) metaLearner.updateWeights('monteCarlo', pred.isCorrect, pred.confidence);
-        if (factor.includes('LSTM')) metaLearner.updateWeights('lstm', pred.isCorrect, pred.confidence);
-        if (factor.includes('FuzzyLogic')) metaLearner.updateWeights('fuzzyLogic', pred.isCorrect, pred.confidence);
-        if (factor.includes('Bayesian')) metaLearner.updateWeights('bayesian', pred.isCorrect, pred.confidence);
-        if (factor.includes('PatternMatch')) metaLearner.updateWeights('patternMatch', pred.isCorrect, pred.confidence);
+        for (const [key, value] of Object.entries(algorithmMap)) {
+          if (factor.includes(key)) {
+            metaLearner.updateWeights(value, pred.isCorrect, pred.confidence);
+          }
+        }
       }
       
       anomalyDetector.learnFromResult(pred.prediction, pred.actual, pred.confidence);
       anomalyDetector.updateTimeWindowStats(pred.actual, new Date(pred.timestamp));
       bayesianInference.updateLikelihood(bayesianInference.getObservationKey(currentData.slice(0,5).map(d=>d.Ket_qua)), pred.actual);
       lstmRecognizer.learn(currentData.slice(0,8).map(d=>d.Ket_qua), pred.actual, pred.isCorrect);
+      
+      // Update Kalman filter với kết quả thực tế
+      const actualValue = pred.actual === 'Tài' ? 1 : 0;
+      kalmanFilter.update(actualValue);
       
       updated = true;
     }
@@ -1266,6 +1837,7 @@ async function verifyPredictions(type, currentData) {
     learningData[type].lastUpdate = new Date().toISOString();
     saveLearningData();
     anomalyDetector.saveAnomalyData();
+    geneticAdaptor.evolve();
   }
 }
 
@@ -1316,6 +1888,72 @@ function savePredictionHistory() {
   }
 }
 
+// ==================== STATISTICAL ANALYSIS ENDPOINTS ====================
+let statisticalAnalyzer = new StatisticalAnalyzer();
+
+app.get('/statistical-analysis', (req, res) => {
+  const randomness = statisticalAnalyzer.testRandomness();
+  const trend = statisticalAnalyzer.analyzeTrend();
+  const ci = statisticalAnalyzer.getTaiRatioCI();
+  const distribution = statisticalAnalyzer.testDistribution();
+  
+  res.json({
+    timestamp: new Date().toISOString(),
+    randomness: {
+      isRandom: randomness.isRandom,
+      pValue: randomness.pValue.toFixed(4),
+      deviation: (randomness.deviation * 100).toFixed(2) + '%'
+    },
+    trend: {
+      direction: trend.trend,
+      slope: trend.slope.toFixed(4),
+      r2: (trend.r2 * 100).toFixed(2) + '%',
+      confidence: trend.confidence.toFixed(2) + '%'
+    },
+    confidenceInterval: {
+      lower: (ci.lower * 100).toFixed(2) + '%',
+      upper: (ci.upper * 100).toFixed(2) + '%',
+      mean: (ci.mean * 100).toFixed(2) + '%',
+      stdDev: (ci.stdDev * 100).toFixed(2) + '%'
+    },
+    distribution: {
+      isUniform: distribution.isUniform,
+      chiSquare: distribution.chi2.toFixed(4)
+    }
+  });
+});
+
+app.get('/kelly-advice', (req, res) => {
+  const results = [];
+  if (monteCarloSimulators.hu) {
+    const huData = monteCarloSimulators.hu.runSimulation([], anomalyDetector, new Date().getHours());
+    const taiProb = parseFloat(huData.taiProbability);
+    const kellyFraction = KellyCriterion.calculate(taiProb);
+    const fractionalKelly = KellyCriterion.fractionalKelly(taiProb, 0.5);
+    results.push({
+      type: 'HU',
+      probability: (taiProb * 100).toFixed(2) + '%',
+      fullKelly: (kellyFraction * 100).toFixed(2) + '%',
+      fractionalKelly: (fractionalKelly * 100).toFixed(2) + '%',
+      advice: kellyFraction > 0.05 ? 'Có thể đặt cược' : 'Nên thận trọng'
+    });
+  }
+  if (monteCarloSimulators.md5) {
+    const md5Data = monteCarloSimulators.md5.runSimulation([], anomalyDetector, new Date().getHours());
+    const taiProb = parseFloat(md5Data.taiProbability);
+    const kellyFraction = KellyCriterion.calculate(taiProb);
+    const fractionalKelly = KellyCriterion.fractionalKelly(taiProb, 0.5);
+    results.push({
+      type: 'MD5',
+      probability: (taiProb * 100).toFixed(2) + '%',
+      fullKelly: (kellyFraction * 100).toFixed(2) + '%',
+      fractionalKelly: (fractionalKelly * 100).toFixed(2) + '%',
+      advice: kellyFraction > 0.05 ? 'Có thể đặt cược' : 'Nên thận trọng'
+    });
+  }
+  res.json(results);
+});
+
 // ==================== MAIN PREDICTION FUNCTION ====================
 function calculateSuperPrediction(data, type) {
   const context = { type };
@@ -1349,6 +1987,12 @@ function calculateSuperPrediction(data, type) {
         factors.push(`${name}: ${detail.confidence.toFixed(0)}%`);
       }
     }
+  }
+  
+  // Cập nhật statistical analyzer với dữ liệu mới
+  const results = data.slice(0, 10).map(d => d.Ket_qua);
+  for (const result of results) {
+    statisticalAnalyzer.addResult(result);
   }
   
   return {
@@ -1393,12 +2037,13 @@ async function autoProcessPredictions() {
       }
     }
     
-    if (Math.random() < 0.05) {
+    // Cập nhật Kalman filter mỗi 10 lần
+    if (Math.random() < 0.1) {
       const predictions = learningData.hu.predictions.filter(p => p.verified).slice(0, 30);
-      const actuals = predictions.map(p => p.actual);
-      const predValues = predictions.map(p => p.prediction);
-      geneticAdaptor.evaluateFitness(predValues, actuals);
-      geneticAdaptor.evolve();
+      const actuals = predictions.map(p => p.actual === 'Tài' ? 1 : 0);
+      for (const actual of actuals) {
+        kalmanFilter.update(actual);
+      }
     }
     
     savePredictionHistory();
@@ -1411,7 +2056,7 @@ async function autoProcessPredictions() {
 // ==================== EXPRESS ROUTES ====================
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.send('kapub');
+  res.send('kapub - Super AI v9.0 with Advanced Statistics');
 });
 
 app.get('/lc79-hu', async (req, res) => {
@@ -1545,6 +2190,7 @@ app.get('/lc79-hu/learning', (req, res) => {
     streakAnalysis: stats.streakAnalysis,
     algorithmWeights: metaLearner.algorithmWeights,
     geneticGeneration: geneticAdaptor.generation,
+    kalmanState: kalmanFilter.x,
     lastUpdate: stats.lastUpdate
   });
 });
@@ -1562,6 +2208,7 @@ app.get('/lc79-md5/learning', (req, res) => {
     streakAnalysis: stats.streakAnalysis,
     algorithmWeights: metaLearner.algorithmWeights,
     geneticGeneration: geneticAdaptor.generation,
+    kalmanState: kalmanFilter.x,
     lastUpdate: stats.lastUpdate
   });
 });
@@ -1581,9 +2228,13 @@ app.get('/reset-learning', (req, res) => {
   trendReversalDetector = new TrendReversalDetector();
   markovChain = new MarkovChainPredictor(2);
   neuralNet = new SimpleNeuralNet();
+  kalmanFilter = new KalmanFilter();
+  hmmModel = new HiddenMarkovModel(2, 2);
+  linearRegression = new LinearRegression();
+  statisticalAnalyzer = new StatisticalAnalyzer();
   setupFullEnsemble();
   saveLearningData();
-  res.json({ message: 'All learning data reset' });
+  res.json({ message: 'All learning data and statistical models reset' });
 });
 
 // ==================== START SERVER ====================
@@ -1596,30 +2247,51 @@ setInterval(() => autoProcessPredictions(), AUTO_SAVE_INTERVAL);
 setTimeout(() => autoProcessPredictions(), 3000);
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
-  console.log(`║     LẨU CUA 79 - SUPER AI v8.0 - 10 ALGORITHMS FULL         ║`);
-  console.log(`╚══════════════════════════════════════════════════════════════════╝\n`);
-  console.log(`🚀 10 THUẬT TOÁN ĐANG CHẠY:\n`);
-  console.log(`   1. 🤖 MONTE CARLO    - Chỉ 10 phiên gần nhất, trọng số thời gian`);
-  console.log(`   2. 🧠 LSTM           - Nhận diện pattern chuỗi thời gian`);
-  console.log(`   3. 🌫️  FUZZY LOGIC    - Xử lý logic mờ linh hoạt`);
-  console.log(`   4. 📈 BAYESIAN       - Suy luận xác suất thông minh`);
-  console.log(`   5. 📐 PATTERN MATCH  - 7+ pattern khác nhau (2-2, 3-3, 1-2-1, etc)`);
-  console.log(`   6. ⚡ ANOMALY BREAK  - Phát hiện điểm bẻ cầu chính xác`);
-  console.log(`   7. ⏰ TIME WINDOW    - Học theo khung giờ đặc thù`);
-  console.log(`   8. 🔄 TREND REVERSAL - Phát hiện đảo chiều xu hướng`);
-  console.log(`   9. 🔗 MARKOV CHAIN   - Xác suất chuyển trạng thái`);
-  console.log(`   10. 🧬 NEURAL NET    - Mạng nơ-ron 2 lớp đơn giản\n`);
-  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+  console.log(`\n╔═══════════════════════════════════════════════════════════════════════════╗`);
+  console.log(`║     LẨU CUA 79 - SUPER AI v9.0 - 13 ALGORITHMS + ADVANCED STATISTICS    ║`);
+  console.log(`╚═══════════════════════════════════════════════════════════════════════════╝\n`);
+  console.log(`📊 CÁC PHƯƠNG PHÁP XÁC SUẤT THỐNG KÊ ĐÃ TÍCH HỢP:\n`);
+  console.log(`   • Phân phối nhị phân (Binomial Distribution)`);
+  console.log(`   • Phân phối Poisson (Poisson Distribution)`);
+  console.log(`   • Phân phối chuẩn tích lũy (Normal CDF)`);
+  console.log(`   • Hệ số tương quan Pearson (Pearson Correlation)`);
+  console.log(`   • Kiểm định Chi-square (Chi-square Test)`);
+  console.log(`   • Khoảng tin cậy Wilson (Wilson Score Interval)`);
+  console.log(`   • Phân tích phương sai (ANOVA)`);
+  console.log(`   • Kiểm định nhị phân (Binomial Test)`);
+  console.log(`   • Lọc Kalman (Kalman Filter - Real-time)`);
+  console.log(`   • Mô hình Markov ẩn (Hidden Markov Model)`);
+  console.log(`   • Hồi quy tuyến tính (Linear Regression)`);
+  console.log(`   • Bootstrapping (Confidence Intervals)`);
+  console.log(`   • Kelly Criterion (Optimal Bet Sizing)`);
+  console.log(`   • Monte Carlo Simulation (8000 simulations)`);
+  console.log(`   • Bayesian Inference (Dynamic Priors)\n`);
+  console.log(`🚀 13 THUẬT TOÁN ĐANG CHẠY:\n`);
+  console.log(`   1.  🤖 MONTE CARLO    - Simulation với 8000 mẫu`);
+  console.log(`   2.  🧠 LSTM           - Pattern recognition chuỗi thời gian`);
+  console.log(`   3.  🌫️  FUZZY LOGIC    - Logic mờ đa tiêu chí`);
+  console.log(`   4.  📈 BAYESIAN       - Suy luận xác suất động`);
+  console.log(`   5.  📐 PATTERN MATCH  - 7+ pattern phức hợp`);
+  console.log(`   6.  ⚡ ANOMALY BREAK  - Phát hiện bẻ cầu thông minh`);
+  console.log(`   7.  ⏰ TIME WINDOW    - Phân tích theo khung giờ`);
+  console.log(`   8.  🔄 TREND REVERSAL - Phát hiện đảo chiều xu hướng`);
+  console.log(`   9.  🔗 MARKOV CHAIN   - Xác suất chuyển bậc 2`);
+  console.log(`   10. 🧬 NEURAL NET     - Mạng nơ-ron 2 lớp`);
+  console.log(`   11. 🎭 HMM            - Hidden Markov Model (Ẩn)`);
+  console.log(`   12. 🎛️  KALMAN         - Lọc nhiễu Kalman realtime`);
+  console.log(`   13. 💰 KELLY          - Optimal bet sizing\n`);
+  console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
   console.log(`📡 Server: http://0.0.0.0:${PORT}`);
   console.log(`\n📋 ENDPOINTS:`);
   console.log(`   GET /lc79-hu              - Dự đoán Tài Xỉu Hũ`);
   console.log(`   GET /lc79-md5             - Dự đoán Tài Xỉu MD5`);
   console.log(`   GET /lc79-hu/lichsu       - Lịch sử dự đoán Hũ`);
   console.log(`   GET /lc79-md5/lichsu      - Lịch sử dự đoán MD5`);
-  console.log(`   GET /lc79-hu/analysis     - Phân tích chi tiết Hũ (xem từng algos)`);
+  console.log(`   GET /lc79-hu/analysis     - Phân tích chi tiết Hũ`);
   console.log(`   GET /lc79-md5/analysis    - Phân tích chi tiết MD5`);
   console.log(`   GET /lc79-hu/learning     - Thống kê học tập Hũ`);
   console.log(`   GET /lc79-md5/learning    - Thống kê học tập MD5`);
+  console.log(`   GET /statistical-analysis - Phân tích thống kê nâng cao`);
+  console.log(`   GET /kelly-advice         - Tư vấn quản lý vốn Kelly`);
   console.log(`   GET /reset-learning       - Reset toàn bộ dữ liệu\n`);
 });
