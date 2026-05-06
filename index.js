@@ -29,14 +29,15 @@ class MetaLearner {
   constructor() {
     this.algorithmWeights = {
       monteCarlo: 1.0,
-      patternMatch: 1.0,
-      anomalyBreak: 1.0,
-      trendReversal: 1.0,
       lstm: 1.0,
       fuzzyLogic: 1.0,
       bayesian: 1.0,
-      genetic: 1.0,
-      ensemble: 1.0
+      patternMatch: 1.0,
+      anomalyBreak: 1.0,
+      timeWindow: 1.0,
+      trendReversal: 1.0,
+      markovChain: 1.0,
+      neuralNet: 1.0
     };
     this.performanceHistory = {};
     this.adaptationRate = 0.05;
@@ -461,7 +462,7 @@ class ImprovedMonteCarlo {
       const windowSums = windowData.map(d => d.Tong);
       
       const windowTaiCount = windowResults.filter(r => r === 'Tài').length;
-      windowTaiRatio = windowTaiCount / this.windowSize;
+      let windowTaiRatio = windowTaiCount / this.windowSize;
       
       let similarity = 0;
       
@@ -591,63 +592,138 @@ class ImprovedMonteCarlo {
   }
 }
 
-// ==================== ENSEMBLE VOTING SYSTEM ====================
-class EnsembleVoter {
-  constructor() {
-    this.voters = [];
-    this.voterWeights = {};
-  }
-
-  addVoter(name, predictFunc, weight = 1.0) {
-    this.voters.push({ name, predictFunc, weight });
-    this.voterWeights[name] = weight;
-  }
-
-  vote(data, context = {}) {
-    const votes = [];
-    const details = {};
+// ==================== TREND REVERSAL DETECTOR ====================
+class TrendReversalDetector {
+  detect(results) {
+    if (results.length < 8) return null;
     
-    for (const voter of this.voters) {
-      try {
-        const result = voter.predictFunc(data, context);
-        if (result && result.prediction) {
-          votes.push({
-            name: voter.name,
-            prediction: result.prediction,
-            confidence: result.confidence || 60,
-            weight: this.voterWeights[voter.name] || voter.weight
-          });
-          details[voter.name] = result;
-        }
-      } catch (e) {}
+    const last8 = results.slice(0, 8);
+    const first4 = last8.slice(0, 4);
+    const last4 = last8.slice(4, 8);
+    
+    const first4Tai = first4.filter(r => r === 'Tài').length;
+    const last4Tai = last4.filter(r => r === 'Tài').length;
+    
+    if ((first4Tai >= 3 && last4Tai <= 1)) {
+      return { prediction: 'Xỉu', confidence: 68, reason: 'Strong Tai reversal to Xiu' };
+    }
+    if ((first4Tai <= 1 && last4Tai >= 3)) {
+      return { prediction: 'Tài', confidence: 68, reason: 'Strong Xiu reversal to Tai' };
     }
     
-    if (votes.length === 0) return { prediction: 'Tài', confidence: 55, details: {} };
-    
-    let taiScore = 0;
-    let xiuScore = 0;
-    let totalWeight = 0;
-    
-    for (const vote of votes) {
-      const effectiveWeight = vote.weight * (vote.confidence / 100);
-      totalWeight += effectiveWeight;
-      if (vote.prediction === 'Tài') taiScore += effectiveWeight;
-      else xiuScore += effectiveWeight;
+    let streak = 1;
+    for (let i = 1; i < results.length; i++) {
+      if (results[i] === results[0]) streak++;
+      else break;
     }
+    if (streak >= 4) {
+      return { 
+        prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài', 
+        confidence: 60 + Math.min(15, streak * 2),
+        reason: `Reversal after ${streak} streak`
+      };
+    }
+    return null;
+  }
+}
+
+// ==================== MARKOV CHAIN PREDICTOR ====================
+class MarkovChainPredictor {
+  constructor(order = 2) {
+    this.order = order;
+    this.transitions = {};
+  }
+
+  learn(sequence) {
+    for (let i = 0; i <= sequence.length - this.order - 1; i++) {
+      const state = sequence.slice(i, i + this.order).join('|');
+      const next = sequence[i + this.order];
+      if (!this.transitions[state]) this.transitions[state] = { Tài: 0, Xỉu: 0 };
+      this.transitions[state][next]++;
+    }
+  }
+
+  predict(lastResults) {
+    if (lastResults.length < this.order) return null;
+    const state = lastResults.slice(0, this.order).join('|');
+    const trans = this.transitions[state];
+    if (!trans || (trans.Tài + trans.Xỉu) < 3) return null;
     
-    const finalPrediction = taiScore >= xiuScore ? 'Tài' : 'Xỉu';
-    const confidence = totalWeight > 0 ? Math.round(Math.max(taiScore, xiuScore) / totalWeight * 100) : 60;
-    
+    const total = trans.Tài + trans.Xỉu;
+    const taiProb = trans.Tài / total;
     return {
-      prediction: finalPrediction,
-      confidence: Math.min(90, Math.max(55, confidence)),
-      details,
-      voteCount: votes.length
+      prediction: taiProb > 0.5 ? 'Tài' : 'Xỉu',
+      confidence: 50 + Math.abs(taiProb - 0.5) * 50,
+      probability: taiProb
     };
   }
 }
 
-// ==================== ANOMALY DETECTION ENGINE (NÂNG CẤP) ====================
+// ==================== SIMPLE NEURAL NETWORK ====================
+class SimpleNeuralNet {
+  constructor() {
+    this.weights1 = Array(10).fill().map(() => Array(6).fill().map(() => Math.random() * 0.2 - 0.1));
+    this.weights2 = Array(6).fill().map(() => Math.random() * 0.2 - 0.1);
+    this.bias1 = Array(6).fill(0);
+    this.bias2 = 0;
+    this.learningRate = 0.01;
+  }
+
+  sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+  
+  forward(features) {
+    let hidden = Array(6).fill(0);
+    for (let i = 0; i < 6; i++) {
+      for (let j = 0; j < 10; j++) {
+        hidden[i] += this.weights1[j][i] * features[j];
+      }
+      hidden[i] = this.sigmoid(hidden[i] + this.bias1[i]);
+    }
+    let output = 0;
+    for (let i = 0; i < 6; i++) output += this.weights2[i] * hidden[i];
+    return this.sigmoid(output + this.bias2);
+  }
+
+  extractFeatures(results, sums) {
+    const features = Array(10).fill(0);
+    features[0] = (results.filter(r => r === 'Tài').length / results.length);
+    let streak = 1;
+    for (let i = 1; i < results.length; i++) {
+      if (results[i] === results[0]) streak++;
+      else break;
+    }
+    features[1] = Math.min(1, streak / 10);
+    let alt = 1;
+    for (let i = 1; i < Math.min(results.length, 12); i++) {
+      if (results[i] !== results[i-1]) alt++;
+      else break;
+    }
+    features[2] = Math.min(1, alt / 12);
+    const recentSums = sums.slice(0, 5);
+    const avg = recentSums.reduce((a,b) => a+b,0)/recentSums.length;
+    features[3] = Math.min(1, avg/13);
+    features[4] = results[0] === 'Tài' ? 1 : 0;
+    features[5] = results[1] === 'Tài' ? 1 : 0;
+    features[6] = results[2] === 'Tài' ? 1 : 0;
+    features[7] = results[3] === 'Tài' ? 1 : 0;
+    features[8] = results[4] === 'Tài' ? 1 : 0;
+    features[9] = alt >= 5 ? 1 : 0;
+    return features;
+  }
+
+  predict(results, sums) {
+    if (results.length < 10) return null;
+    const features = this.extractFeatures(results, sums);
+    const output = this.forward(features);
+    return {
+      prediction: output > 0.5 ? 'Tài' : 'Xỉu',
+      confidence: 50 + Math.abs(output - 0.5) * 60,
+      probability: output
+    };
+  }
+}
+
+// ==================== ANOMALY DETECTION ENGINE ====================
 class AnomalyDetector {
   constructor() {
     this.anomalyPatterns = [];
@@ -815,10 +891,108 @@ class AnomalyDetector {
   }
 }
 
+// ==================== ENSEMBLE VOTING SYSTEM ====================
+class EnsembleVoter {
+  constructor() {
+    this.voters = [];
+    this.voterWeights = {};
+  }
+
+  addVoter(name, predictFunc, weight = 1.0) {
+    this.voters.push({ name, predictFunc, weight });
+    this.voterWeights[name] = weight;
+  }
+
+  vote(data, context = {}) {
+    const votes = [];
+    const details = {};
+    let taiScore = 0;
+    let xiuScore = 0;
+    let totalWeight = 0;
+    
+    for (const voter of this.voters) {
+      try {
+        const result = voter.predictFunc(data, context);
+        if (result && result.prediction) {
+          const effectiveWeight = voter.weight * (result.confidence / 100);
+          totalWeight += effectiveWeight;
+          
+          if (result.prediction === 'Tài') taiScore += effectiveWeight;
+          else xiuScore += effectiveWeight;
+          
+          votes.push({
+            name: voter.name,
+            prediction: result.prediction,
+            confidence: result.confidence || 60,
+            weight: effectiveWeight
+          });
+          details[voter.name] = result;
+        }
+      } catch (e) {
+        // Silent fail
+      }
+    }
+    
+    if (votes.length === 0) {
+      return { prediction: 'Tài', confidence: 55, details: {}, voteCount: 0, totalVoters: this.voters.length, taiScore: 0, xiuScore: 0 };
+    }
+    
+    const finalPrediction = taiScore >= xiuScore ? 'Tài' : 'Xỉu';
+    const confidence = totalWeight > 0 ? Math.round(Math.max(taiScore, xiuScore) / totalWeight * 100) : 60;
+    
+    return {
+      prediction: finalPrediction,
+      confidence: Math.min(90, Math.max(55, confidence)),
+      details,
+      voteCount: votes.length,
+      totalVoters: this.voters.length,
+      taiScore: taiScore.toFixed(3),
+      xiuScore: xiuScore.toFixed(3)
+    };
+  }
+}
+
+// ==================== PATTERN DETECTORS ====================
+const patternDetectors = {
+  cau_bet: (r) => ({ prediction: r[0] || 'Tài', confidence: 55, name: 'cau_bet' }),
+  cau_dao_11: (r) => r[0] === r[1] ? null : { prediction: r[0], confidence: 58, name: 'cau_dao_11' },
+  cau_22: (r) => {
+    if (r.length >= 4 && r[0] === r[1] && r[2] === r[3] && r[0] !== r[2]) {
+      return { prediction: r[0] === 'Tài' ? 'Xỉu' : 'Tài', confidence: 65, name: 'cau_22' };
+    }
+    return null;
+  },
+  cau_33: (r) => {
+    if (r.length >= 6 && r[0] === r[1] && r[1] === r[2] && r[3] === r[4] && r[4] === r[5] && r[0] !== r[3]) {
+      return { prediction: r[0] === 'Tài' ? 'Xỉu' : 'Tài', confidence: 70, name: 'cau_33' };
+    }
+    return null;
+  },
+  cau_nhip_nghieng: (r) => {
+    if (r.length < 6) return null;
+    const taiCount = r.slice(0,6).filter(x => x === 'Tài').length;
+    if (taiCount === 4 || taiCount === 5) return { prediction: 'Xỉu', confidence: 62, name: 'cau_nhip_nghieng_tai' };
+    if (taiCount === 1 || taiCount === 2) return { prediction: 'Tài', confidence: 62, name: 'cau_nhip_nghieng_xiu' };
+    return null;
+  },
+  cau_121: (r) => {
+    if (r.length >= 3 && r[0] === r[2] && r[0] !== r[1]) {
+      return { prediction: r[0], confidence: 60, name: 'cau_121' };
+    }
+    return null;
+  },
+  cau_123: (r) => {
+    if (r.length >= 3 && r[0] !== r[1] && r[1] !== r[2] && r[0] !== r[2]) {
+      return { prediction: r[2] === 'Tài' ? 'Xỉu' : 'Tài', confidence: 58, name: 'cau_123' };
+    }
+    return null;
+  }
+};
+
 // ==================== LEARNING DATA STRUCTURE ====================
 let learningData = {
-  hu: { predictions: [], totalPredictions: 0, correctPredictions: 0, recentAccuracy: [], streakAnalysis: { currentStreak: 0, bestStreak: 0, worstStreak: 0 } },
-  md5: { predictions: [], totalPredictions: 0, correctPredictions: 0, recentAccuracy: [], streakAnalysis: { currentStreak: 0, bestStreak: 0, worstStreak: 0 } }
+  hu: { predictions: [], totalPredictions: 0, correctPredictions: 0, recentAccuracy: [], streakAnalysis: { currentStreak: 0, bestStreak: 0, worstStreak: 0 }, lastUpdate: null },
+  md5: { predictions: [], totalPredictions: 0, correctPredictions: 0, recentAccuracy: [], streakAnalysis: { currentStreak: 0, bestStreak: 0, worstStreak: 0 }, lastUpdate: null }
 };
 
 // Khởi tạo các engine
@@ -829,35 +1003,16 @@ let lstmRecognizer = new LSTMPatternRecognizer();
 let fuzzyEngine = new FuzzyLogicEngine();
 let bayesianInference = new BayesianInference();
 let geneticAdaptor = new GeneticAdaptor();
+let trendReversalDetector = new TrendReversalDetector();
+let markovChain = new MarkovChainPredictor(2);
+let neuralNet = new SimpleNeuralNet();
 let ensembleVoter = new EnsembleVoter();
 
-// Khởi tạo các pattern functions
-let patternDetectors = {
-  cau_bet: (r) => ({ prediction: r[0] || 'Tài', confidence: 55 }),
-  cau_dao_11: (r) => r[0] === r[1] ? null : { prediction: r[0], confidence: 58 },
-  cau_22: (r) => {
-    if (r.length >= 4 && r[0] === r[1] && r[2] === r[3] && r[0] !== r[2]) {
-      return { prediction: r[0] === 'Tài' ? 'Xỉu' : 'Tài', confidence: 65 };
-    }
-    return null;
-  },
-  cau_33: (r) => {
-    if (r.length >= 6 && r[0] === r[1] && r[1] === r[2] && r[3] === r[4] && r[4] === r[5] && r[0] !== r[3]) {
-      return { prediction: r[0] === 'Tài' ? 'Xỉu' : 'Tài', confidence: 70 };
-    }
-    return null;
-  },
-  cau_nhip_nghieng: (r) => {
-    if (r.length < 6) return null;
-    const taiCount = r.slice(0,6).filter(x => x === 'Tài').length;
-    if (taiCount === 4 || taiCount === 5) return { prediction: 'Xỉu', confidence: 62 };
-    if (taiCount === 1 || taiCount === 2) return { prediction: 'Tài', confidence: 62 };
-    return null;
-  }
-};
-
-// Đăng ký voters cho ensemble
-function setupEnsemble() {
+// ==================== SETUP FULL ENSEMBLE ====================
+function setupFullEnsemble() {
+  ensembleVoter = new EnsembleVoter();
+  
+  // 1. MONTE CARLO
   ensembleVoter.addVoter('MonteCarlo', (data, ctx) => {
     if (monteCarloSimulators[ctx.type]) {
       return monteCarloSimulators[ctx.type].runSimulation(data, anomalyDetector, new Date().getHours());
@@ -865,11 +1020,13 @@ function setupEnsemble() {
     return null;
   }, metaLearner.getWeight('monteCarlo'));
   
+  // 2. LSTM
   ensembleVoter.addVoter('LSTM', (data, ctx) => {
     const results = data.slice(0, 10).map(d => d.Ket_qua);
     return lstmRecognizer.predict(results);
   }, metaLearner.getWeight('lstm'));
   
+  // 3. FUZZY LOGIC
   ensembleVoter.addVoter('FuzzyLogic', (data, ctx) => {
     const results = data.slice(0, 10).map(d => d.Ket_qua);
     let streak = 1, alternating = 1;
@@ -882,29 +1039,46 @@ function setupEnsemble() {
       else break;
     }
     const sums = data.slice(0, 8).map(d => d.Tong);
-    const vol = sums.length > 1 ? Math.sqrt(sums.slice(0,5).reduce((a,b,i,arr) => a + Math.pow(b - arr.reduce((c,d)=>c+d,0)/arr.length, 2), 0)/Math.min(5, sums.length)) : 0;
-    const fuzzy = fuzzyEngine.evaluate(streak, alternating, vol);
-    if (fuzzy.decision === 'break') {
-      return { prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài', confidence: fuzzy.confidence };
+    let vol = 0;
+    if (sums.length > 1) {
+      const mean = sums.slice(0,5).reduce((a,b)=>a+b,0)/Math.min(5, sums.length);
+      vol = Math.sqrt(sums.slice(0,5).reduce((a,b)=>a+Math.pow(b-mean,2),0)/Math.min(5, sums.length));
     }
-    return { prediction: results[0], confidence: fuzzy.confidence };
+    const fuzzy = fuzzyEngine.evaluate(streak, alternating, vol);
+    let result = { prediction: results[0], confidence: fuzzy.confidence };
+    if (fuzzy.decision === 'break') {
+      result.prediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
+    }
+    return result;
   }, metaLearner.getWeight('fuzzyLogic'));
   
+  // 4. BAYESIAN
   ensembleVoter.addVoter('Bayesian', (data, ctx) => {
     const results = data.slice(0, 8).map(d => d.Ket_qua);
     const obsKey = bayesianInference.getObservationKey(results);
     return bayesianInference.predict([obsKey]);
   }, metaLearner.getWeight('bayesian'));
   
+  // 5. PATTERN MATCH
   ensembleVoter.addVoter('PatternMatch', (data, ctx) => {
-    const results = data.slice(0, 8).map(d => d.Ket_qua);
+    const results = data.slice(0, 10).map(d => d.Ket_qua);
+    let bestMatch = null;
+    let bestConfidence = 0;
     for (const [name, detector] of Object.entries(patternDetectors)) {
       const result = detector(results);
-      if (result) return result;
+      if (result && result.confidence > bestConfidence) {
+        bestMatch = result;
+        bestConfidence = result.confidence;
+      }
     }
-    return null;
+    if (results.length >= 5 && results[0] === results[1] && results[2] === results[3] && results[0] !== results[2]) {
+      const altResult = { prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài', confidence: 65 };
+      if (altResult.confidence > bestConfidence) bestMatch = altResult;
+    }
+    return bestMatch;
   }, metaLearner.getWeight('patternMatch'));
   
+  // 6. ANOMALY BREAK
   ensembleVoter.addVoter('AnomalyBreak', (data, ctx) => {
     const results = data.slice(0, 10).map(d => d.Ket_qua);
     const anomaly = anomalyDetector.detectAnomaly(results, 8);
@@ -916,13 +1090,44 @@ function setupEnsemble() {
     }
     return null;
   }, metaLearner.getWeight('anomalyBreak'));
+  
+  // 7. TIME WINDOW
+  ensembleVoter.addVoter('TimeWindow', (data, ctx) => {
+    return anomalyDetector.predictByTimeWindow(new Date());
+  }, metaLearner.getWeight('timeWindow'));
+  
+  // 8. TREND REVERSAL
+  ensembleVoter.addVoter('TrendReversal', (data, ctx) => {
+    const results = data.slice(0, 10).map(d => d.Ket_qua);
+    return trendReversalDetector.detect(results);
+  }, metaLearner.getWeight('trendReversal'));
+  
+  // 9. MARKOV CHAIN
+  ensembleVoter.addVoter('MarkovChain', (data, ctx) => {
+    const results = data.slice(0, 12).map(d => d.Ket_qua);
+    if (learningData[ctx.type].predictions.length > 10) {
+      const recentActuals = learningData[ctx.type].predictions.filter(p => p.verified).slice(0, 30).map(p => p.actual);
+      if (recentActuals.length > 10) markovChain.learn(recentActuals);
+    }
+    return markovChain.predict(results);
+  }, metaLearner.getWeight('markovChain'));
+  
+  // 10. NEURAL NETWORK
+  ensembleVoter.addVoter('NeuralNet', (data, ctx) => {
+    const results = data.slice(0, 10).map(d => d.Ket_qua);
+    const sums = data.slice(0, 10).map(d => d.Tong);
+    return neuralNet.predict(results, sums);
+  }, metaLearner.getWeight('neuralNet'));
+  
+  console.log('\n✅ ENSEMBLE CONFIGURED WITH 10 ALGORITHMS');
+  console.log('   1. Monte Carlo    2. LSTM          3. Fuzzy Logic    4. Bayesian       5. Pattern Match');
+  console.log('   6. Anomaly Break  7. Time Window   8. Trend Reversal 9. Markov Chain   10. Neural Network\n');
 }
 
 // ==================== HELPER FUNCTIONS ====================
 function updateMonteCarloSimulators(type, data) {
   if (data && data.length >= 10) {
     monteCarloSimulators[type] = new ImprovedMonteCarlo(data, 10);
-    console.log(`[MC] Initialized for ${type} with ${Math.min(10, data.length)} sessions`);
   }
 }
 
@@ -1039,12 +1244,14 @@ async function verifyPredictions(type, currentData) {
       learningData[type].recentAccuracy.push(pred.isCorrect ? 1 : 0);
       if (learningData[type].recentAccuracy.length > 50) learningData[type].recentAccuracy.shift();
       
-      // Cập nhật meta learning
+      // Update meta learning
       const factors = pred.factors || [];
       for (const factor of factors) {
-        if (factor.includes('MC:')) metaLearner.updateWeights('monteCarlo', pred.isCorrect, pred.confidence);
+        if (factor.includes('MonteCarlo')) metaLearner.updateWeights('monteCarlo', pred.isCorrect, pred.confidence);
         if (factor.includes('LSTM')) metaLearner.updateWeights('lstm', pred.isCorrect, pred.confidence);
-        if (factor.includes('Fuzzy')) metaLearner.updateWeights('fuzzyLogic', pred.isCorrect, pred.confidence);
+        if (factor.includes('FuzzyLogic')) metaLearner.updateWeights('fuzzyLogic', pred.isCorrect, pred.confidence);
+        if (factor.includes('Bayesian')) metaLearner.updateWeights('bayesian', pred.isCorrect, pred.confidence);
+        if (factor.includes('PatternMatch')) metaLearner.updateWeights('patternMatch', pred.isCorrect, pred.confidence);
       }
       
       anomalyDetector.learnFromResult(pred.prediction, pred.actual, pred.confidence);
@@ -1111,44 +1318,35 @@ function savePredictionHistory() {
 
 // ==================== MAIN PREDICTION FUNCTION ====================
 function calculateSuperPrediction(data, type) {
-  const results = data.slice(0, 15).map(d => d.Ket_qua);
-  const currentTime = new Date();
-  const currentHour = currentTime.getHours();
   const context = { type };
-  
-  // Ensemble voting
   const ensembleResult = ensembleVoter.vote(data, context);
   
-  // Bổ sung thêm genetic optimization
-  const geneticWeights = geneticAdaptor.getOptimalWeights();
-  
-  // Time window prediction
-  const timePrediction = anomalyDetector.predictByTimeWindow(currentTime);
-  if (timePrediction && timePrediction.confidence > 65) {
+  const timePrediction = anomalyDetector.predictByTimeWindow(new Date());
+  if (timePrediction && timePrediction.confidence > 68) {
     if (ensembleResult.confidence < timePrediction.confidence - 5) {
       ensembleResult.prediction = timePrediction.prediction;
       ensembleResult.confidence = timePrediction.confidence;
     }
   }
   
-  // Bias correction cuối cùng
   const biasCorrection = anomalyDetector.getBiasCorrection();
-  if (biasCorrection > 0.08 && ensembleResult.prediction === 'Xỉu') {
-    ensembleResult.prediction = 'Tài';
-    ensembleResult.confidence = Math.min(88, ensembleResult.confidence + 3);
-  } else if (biasCorrection < -0.08 && ensembleResult.prediction === 'Tài') {
-    ensembleResult.prediction = 'Xỉu';
-    ensembleResult.confidence = Math.min(88, ensembleResult.confidence + 3);
+  if (Math.abs(biasCorrection) > 0.08) {
+    if (biasCorrection > 0.08 && ensembleResult.prediction === 'Xỉu') {
+      ensembleResult.prediction = 'Tài';
+      ensembleResult.confidence = Math.min(88, ensembleResult.confidence + 3);
+    } else if (biasCorrection < -0.08 && ensembleResult.prediction === 'Tài') {
+      ensembleResult.prediction = 'Xỉu';
+      ensembleResult.confidence = Math.min(88, ensembleResult.confidence + 3);
+    }
   }
   
   const finalConfidence = Math.max(55, Math.min(88, ensembleResult.confidence));
   
-  // Xây dựng factors cho logging
   const factors = [];
   if (ensembleResult.details) {
     for (const [name, detail] of Object.entries(ensembleResult.details)) {
       if (detail && detail.confidence) {
-        factors.push(`${name}: ${detail.confidence}%`);
+        factors.push(`${name}: ${detail.confidence.toFixed(0)}%`);
       }
     }
   }
@@ -1156,8 +1354,9 @@ function calculateSuperPrediction(data, type) {
   return {
     prediction: ensembleResult.prediction,
     confidence: finalConfidence,
-    factors: factors.slice(0, 5),
-    voteCount: ensembleResult.voteCount || 0
+    factors: factors.slice(0, 8),
+    voteCount: ensembleResult.voteCount || 0,
+    totalAlgorithms: ensembleResult.totalVoters || 0
   };
 }
 
@@ -1175,7 +1374,7 @@ async function autoProcessPredictions() {
         savePredictionToHistory('hu', nextHuPhien, result.prediction, result.confidence);
         recordPrediction('hu', nextHuPhien, result.prediction, result.confidence, result.factors);
         lastProcessedPhien.hu = nextHuPhien;
-        console.log(`[Auto] Hu ${nextHuPhien}: ${result.prediction} (${result.confidence}%) | Votes: ${result.voteCount}`);
+        console.log(`[Auto] Hu ${nextHuPhien}: ${result.prediction} (${result.confidence}%) | ${result.voteCount}/${result.totalAlgorithms} algos`);
       }
     }
     
@@ -1190,11 +1389,10 @@ async function autoProcessPredictions() {
         savePredictionToHistory('md5', nextMd5Phien, result.prediction, result.confidence);
         recordPrediction('md5', nextMd5Phien, result.prediction, result.confidence, result.factors);
         lastProcessedPhien.md5 = nextMd5Phien;
-        console.log(`[Auto] MD5 ${nextMd5Phien}: ${result.prediction} (${result.confidence}%) | Votes: ${result.voteCount}`);
+        console.log(`[Auto] MD5 ${nextMd5Phien}: ${result.prediction} (${result.confidence}%) | ${result.voteCount}/${result.totalAlgorithms} algos`);
       }
     }
     
-    // Cập nhật genetic algorithm mỗi 20 lần
     if (Math.random() < 0.05) {
       const predictions = learningData.hu.predictions.filter(p => p.verified).slice(0, 30);
       const actuals = predictions.map(p => p.actual);
@@ -1307,7 +1505,8 @@ app.get('/lc79-hu/analysis', async (req, res) => {
       prediction: normalizeResult(result.prediction), 
       confidence: result.confidence, 
       factors: result.factors,
-      voteCount: result.voteCount
+      voteCount: result.voteCount,
+      totalAlgorithms: result.totalAlgorithms
     });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -1325,7 +1524,8 @@ app.get('/lc79-md5/analysis', async (req, res) => {
       prediction: normalizeResult(result.prediction), 
       confidence: result.confidence, 
       factors: result.factors,
-      voteCount: result.voteCount
+      voteCount: result.voteCount,
+      totalAlgorithms: result.totalAlgorithms
     });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -1368,8 +1568,8 @@ app.get('/lc79-md5/learning', (req, res) => {
 
 app.get('/reset-learning', (req, res) => {
   learningData = {
-    hu: { predictions: [], totalPredictions: 0, correctPredictions: 0, recentAccuracy: [], streakAnalysis: { currentStreak: 0, bestStreak: 0, worstStreak: 0 } },
-    md5: { predictions: [], totalPredictions: 0, correctPredictions: 0, recentAccuracy: [], streakAnalysis: { currentStreak: 0, bestStreak: 0, worstStreak: 0 } }
+    hu: { predictions: [], totalPredictions: 0, correctPredictions: 0, recentAccuracy: [], streakAnalysis: { currentStreak: 0, bestStreak: 0, worstStreak: 0 }, lastUpdate: null },
+    md5: { predictions: [], totalPredictions: 0, correctPredictions: 0, recentAccuracy: [], streakAnalysis: { currentStreak: 0, bestStreak: 0, worstStreak: 0 }, lastUpdate: null }
   };
   monteCarloSimulators = { hu: null, md5: null };
   anomalyDetector = new AnomalyDetector();
@@ -1378,7 +1578,10 @@ app.get('/reset-learning', (req, res) => {
   fuzzyEngine = new FuzzyLogicEngine();
   bayesianInference = new BayesianInference();
   geneticAdaptor = new GeneticAdaptor();
-  setupEnsemble();
+  trendReversalDetector = new TrendReversalDetector();
+  markovChain = new MarkovChainPredictor(2);
+  neuralNet = new SimpleNeuralNet();
+  setupFullEnsemble();
   saveLearningData();
   res.json({ message: 'All learning data reset' });
 });
@@ -1387,34 +1590,36 @@ app.get('/reset-learning', (req, res) => {
 loadLearningData();
 loadPredictionHistory();
 anomalyDetector.loadAnomalyData();
-setupEnsemble();
+setupFullEnsemble();
 
 setInterval(() => autoProcessPredictions(), AUTO_SAVE_INTERVAL);
 setTimeout(() => autoProcessPredictions(), 3000);
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
-  console.log(`║     LẨU CUA 79 - SUPER AI v7.0 - FULL ALGORITHM SUITE        ║`);
+  console.log(`║     LẨU CUA 79 - SUPER AI v8.0 - 10 ALGORITHMS FULL         ║`);
   console.log(`╚══════════════════════════════════════════════════════════════════╝\n`);
-  console.log(`🚀 CÁC THUẬT TOÁN ĐÃ NÂNG CẤP:\n`);
-  console.log(`   📊 MONTE CARLO    - Chỉ phân tích 10 phiên gần nhất`);
-  console.log(`   🧠 LSTM           - Nhận diện pattern chuỗi thời gian`);
-  console.log(`   🌫️  FUZZY LOGIC    - Xử lý logic mờ linh hoạt`);
-  console.log(`   📈 BAYESIAN       - Suy luận xác suất thông minh`);
-  console.log(`   🧬 GENETIC        - Tiến hóa trọng số theo thời gian`);
-  console.log(`   🗳️  ENSEMBLE       - Bỏ phiếu đa thuật toán`);
-  console.log(`   🎯 META LEARNING  - Học cách học từ dự đoán trước`);
-  console.log(`   ⚡ ANOMALY        - Phát hiện điểm bẻ cầu chính xác\n`);
+  console.log(`🚀 10 THUẬT TOÁN ĐANG CHẠY:\n`);
+  console.log(`   1. 🤖 MONTE CARLO    - Chỉ 10 phiên gần nhất, trọng số thời gian`);
+  console.log(`   2. 🧠 LSTM           - Nhận diện pattern chuỗi thời gian`);
+  console.log(`   3. 🌫️  FUZZY LOGIC    - Xử lý logic mờ linh hoạt`);
+  console.log(`   4. 📈 BAYESIAN       - Suy luận xác suất thông minh`);
+  console.log(`   5. 📐 PATTERN MATCH  - 7+ pattern khác nhau (2-2, 3-3, 1-2-1, etc)`);
+  console.log(`   6. ⚡ ANOMALY BREAK  - Phát hiện điểm bẻ cầu chính xác`);
+  console.log(`   7. ⏰ TIME WINDOW    - Học theo khung giờ đặc thù`);
+  console.log(`   8. 🔄 TREND REVERSAL - Phát hiện đảo chiều xu hướng`);
+  console.log(`   9. 🔗 MARKOV CHAIN   - Xác suất chuyển trạng thái`);
+  console.log(`   10. 🧬 NEURAL NET    - Mạng nơ-ron 2 lớp đơn giản\n`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
   console.log(`📡 Server: http://0.0.0.0:${PORT}`);
   console.log(`\n📋 ENDPOINTS:`);
-  console.log(`   GET /lc79-hu         - Dự đoán Tài Xỉu Hũ`);
-  console.log(`   GET /lc79-md5        - Dự đoán Tài Xỉu MD5`);
-  console.log(`   GET /lc79-hu/lichsu  - Lịch sử dự đoán Hũ`);
-  console.log(`   GET /lc79-md5/lichsu - Lịch sử dự đoán MD5`);
-  console.log(`   GET /lc79-hu/analysis- Phân tích chi tiết Hũ`);
-  console.log(`   GET /lc79-md5/analysis- Phân tích chi tiết MD5`);
-  console.log(`   GET /lc79-hu/learning - Thống kê học tập Hũ`);
-  console.log(`   GET /lc79-md5/learning- Thống kê học tập MD5`);
-  console.log(`   GET /reset-learning   - Reset toàn bộ dữ liệu\n`);
+  console.log(`   GET /lc79-hu              - Dự đoán Tài Xỉu Hũ`);
+  console.log(`   GET /lc79-md5             - Dự đoán Tài Xỉu MD5`);
+  console.log(`   GET /lc79-hu/lichsu       - Lịch sử dự đoán Hũ`);
+  console.log(`   GET /lc79-md5/lichsu      - Lịch sử dự đoán MD5`);
+  console.log(`   GET /lc79-hu/analysis     - Phân tích chi tiết Hũ (xem từng algos)`);
+  console.log(`   GET /lc79-md5/analysis    - Phân tích chi tiết MD5`);
+  console.log(`   GET /lc79-hu/learning     - Thống kê học tập Hũ`);
+  console.log(`   GET /lc79-md5/learning    - Thống kê học tập MD5`);
+  console.log(`   GET /reset-learning       - Reset toàn bộ dữ liệu\n`);
 });
