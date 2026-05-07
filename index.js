@@ -520,7 +520,7 @@ function savePredictionToHistory(type, phien, prediction, confidence) {
         phien_hien_tai: phien.toString(),
         du_doan: normalizeResult(prediction),
         ti_le: `${confidence}%`,
-        id: '@tiendataox',
+        id: 'kapub',
         timestamp: new Date().toISOString()
     };
     
@@ -652,7 +652,7 @@ app.get('/lc79-hu', async (req, res) => {
             phien_hien_tai: nextPhien.toString(),
             du_doan: normalizeResult(result.prediction),
             ti_le: `${result.confidence}%`,
-            id: '@tiendataox'
+            id: 'kapub'
         });
     } catch (error) {
         res.status(500).json({ error: 'Server error' });
@@ -673,7 +673,7 @@ app.get('/lc79-md5', async (req, res) => {
             phien_hien_tai: nextPhien.toString(),
             du_doan: normalizeResult(result.prediction),
             ti_le: `${result.confidence}%`,
-            id: '@tiendataox'
+            id: 'kapub'
         });
     } catch (error) {
         res.status(500).json({ error: 'Server error' });
