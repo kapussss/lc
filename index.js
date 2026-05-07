@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 const API_URL_HU = 'https://wtx.tele68.com/v1/tx/sessions';
 const API_URL_MD5 = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
@@ -33,6 +33,9 @@ class NeuralPatternRecognizer {
   }
 
   updateMemory(result) {
+    // Đảm bảo result có giá trị hợp lệ
+    if (!result || (result !== 'Tài' && result !== 'Xỉu')) return;
+    
     this.shortTermMemory.unshift(result);
     if (this.shortTermMemory.length > 20) this.shortTermMemory.pop();
     
@@ -43,7 +46,10 @@ class NeuralPatternRecognizer {
     if (this.longTermMemory.length >= 2) {
       const from = this.longTermMemory[1];
       const to = this.longTermMemory[0];
-      this.transitionMatrix[from][to]++;
+      // Kiểm tra tồn tại trước khi cập nhật
+      if (this.transitionMatrix[from] && this.transitionMatrix[from][to] !== undefined) {
+        this.transitionMatrix[from][to]++;
+      }
     }
   }
 
@@ -64,11 +70,14 @@ class NeuralPatternRecognizer {
       
       const similarityRate = similarity / currentSeq.length;
       if (similarityRate >= 0.6) {
-        matches.push({
-          similarity: similarityRate,
-          nextResult: this.longTermMemory[i + currentSeq.length],
-          position: i
-        });
+        const nextResult = this.longTermMemory[i + currentSeq.length];
+        if (nextResult === 'Tài' || nextResult === 'Xỉu') {
+          matches.push({
+            similarity: similarityRate,
+            nextResult: nextResult,
+            position: i
+          });
+        }
       }
     }
     
@@ -91,8 +100,10 @@ class NeuralPatternRecognizer {
       const weight = match.similarity;
       totalWeight += weight;
       if (match.nextResult === 'Tài') taiCount += weight;
-      else xiuCount += weight;
+      else if (match.nextResult === 'Xỉu') xiuCount += weight;
     });
+    
+    if (totalWeight === 0) return null;
     
     const taiProb = taiCount / totalWeight;
     const confidence = 50 + Math.abs(taiProb - 0.5) * 80;
@@ -106,14 +117,23 @@ class NeuralPatternRecognizer {
   }
 
   predictFromTransition() {
+    // FIXED: Kiểm tra kỹ trước khi truy cập transition matrix
     if (this.longTermMemory.length < 2) return null;
     
     const lastResult = this.longTermMemory[0];
-    const totalFrom = this.transitionMatrix[lastResult].Tai + this.transitionMatrix[lastResult].Xiu;
     
-    if (totalFrom < 5) return null;
+    // Kiểm tra lastResult có hợp lệ không
+    if (!lastResult || (lastResult !== 'Tài' && lastResult !== 'Xỉu')) return null;
     
-    const taiProb = this.transitionMatrix[lastResult].Tai / totalFrom;
+    // Kiểm tra transition matrix có chứa key không
+    const transitionFrom = this.transitionMatrix[lastResult];
+    if (!transitionFrom) return null;
+    
+    const totalFrom = (transitionFrom.Tai || 0) + (transitionFrom.Xiu || 0);
+    
+    if (totalFrom < 3) return null; // Giảm ngưỡng từ 5 xuống 3 để có dữ liệu sớm hơn
+    
+    const taiProb = (transitionFrom.Tai || 0) / totalFrom;
     const confidence = 50 + Math.abs(taiProb - 0.5) * 60;
     
     return {
@@ -126,10 +146,14 @@ class NeuralPatternRecognizer {
   detectBreakPoint(results) {
     if (results.length < 5) return null;
     
+    // Lọc kết quả hợp lệ
+    const validResults = results.filter(r => r === 'Tài' || r === 'Xỉu');
+    if (validResults.length < 5) return null;
+    
     // Phát hiện streak dài
     let streakLength = 1;
-    for (let i = 1; i < results.length; i++) {
-      if (results[i] === results[0]) streakLength++;
+    for (let i = 1; i < validResults.length; i++) {
+      if (validResults[i] === validResults[0]) streakLength++;
       else break;
     }
     
@@ -138,7 +162,7 @@ class NeuralPatternRecognizer {
       const breakProbability = Math.min(0.8, 0.3 + (streakLength - 3) * 0.1);
       if (breakProbability > 0.55) {
         return {
-          prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài',
+          prediction: validResults[0] === 'Tài' ? 'Xỉu' : 'Tài',
           confidence: 55 + streakLength * 3,
           reason: `Break streak of ${streakLength}`,
           breakProbability
@@ -148,13 +172,13 @@ class NeuralPatternRecognizer {
     
     // Phát hiện alternating pattern dài bất thường
     let alternatingLength = 1;
-    for (let i = 1; i < Math.min(results.length, 12); i++) {
-      if (results[i] !== results[i-1]) alternatingLength++;
+    for (let i = 1; i < Math.min(validResults.length, 12); i++) {
+      if (validResults[i] !== validResults[i-1]) alternatingLength++;
       else break;
     }
     
     if (alternatingLength >= 7) {
-      const prediction = results[0];
+      const prediction = validResults[0];
       return {
         prediction: prediction,
         confidence: 60 + Math.min(15, alternatingLength),
@@ -179,13 +203,18 @@ class AdaptiveEnsemble {
     };
     this.performanceHistory = [];
     this.consecutiveLosses = 0;
+    this.consecutiveWins = 0;
     this.lastAdjustment = null;
   }
 
   updateWeights(lastPredictions, actualResult) {
+    if (!actualResult || (actualResult !== 'Tài' && actualResult !== 'Xỉu')) return;
+    
     let adjustments = {};
     
     for (const [model, prediction] of Object.entries(lastPredictions)) {
+      if (!prediction || (prediction !== 'Tài' && prediction !== 'Xỉu')) continue;
+      
       const isCorrect = prediction === actualResult;
       if (isCorrect) {
         this.modelWeights[model] = Math.min(1.5, this.modelWeights[model] * 1.05);
@@ -205,13 +234,14 @@ class AdaptiveEnsemble {
         }
       }
       this.consecutiveLosses = 0;
-    } else if (this.consecutiveLosses <= -3) {
+    } else if (this.consecutiveWins >= 3) {
       // Đang thắng liên tiếp, tăng weight
       for (const model of Object.keys(this.modelWeights)) {
         if (lastPredictions[model] === actualResult) {
           this.modelWeights[model] = Math.min(1.8, this.modelWeights[model] * 1.08);
         }
       }
+      this.consecutiveWins = 0;
     }
     
     this.lastAdjustment = new Date().toISOString();
@@ -220,10 +250,10 @@ class AdaptiveEnsemble {
 
   recordResult(isCorrect) {
     if (isCorrect) {
-      if (this.consecutiveLosses > 0) this.consecutiveLosses = 0;
-      this.consecutiveLosses--;
+      this.consecutiveLosses = 0;
+      this.consecutiveWins++;
     } else {
-      if (this.consecutiveLosses < 0) this.consecutiveLosses = 0;
+      this.consecutiveWins = 0;
       this.consecutiveLosses++;
     }
     
@@ -274,15 +304,17 @@ class TrendAnalyzer {
   }
 
   analyzeTrend(results) {
-    if (results.length < 10) return null;
+    // Lọc kết quả hợp lệ
+    const validResults = results.filter(r => r === 'Tài' || r === 'Xỉu');
+    if (validResults.length < 10) return null;
     
     const windows = [5, 10, 15];
     const trends = {};
     
     windows.forEach(size => {
-      const window = results.slice(0, size);
+      const window = validResults.slice(0, Math.min(size, validResults.length));
       const taiCount = window.filter(r => r === 'Tài').length;
-      const ratio = taiCount / size;
+      const ratio = taiCount / window.length;
       trends[`window_${size}`] = {
         taiRatio: ratio,
         dominant: ratio > 0.55 ? 'Tài' : (ratio < 0.45 ? 'Xỉu' : 'Balanced'),
@@ -299,7 +331,7 @@ class TrendAnalyzer {
     
     if (shortTerm && longTerm) {
       if (shortTerm.taiRatio > 0.6 && longTerm.taiRatio < 0.5) {
-        // Short term Tai strong but long term balanced -> reversal可能
+        // Short term Tai strong but long term balanced -> reversal possible
         prediction = 'Xỉu';
         confidence = 65;
       } else if (shortTerm.taiRatio < 0.4 && longTerm.taiRatio > 0.5) {
@@ -315,10 +347,12 @@ class TrendAnalyzer {
   }
 
   analyzeCounterTrend(results) {
-    if (results.length < 8) return null;
+    // Lọc kết quả hợp lệ
+    const validResults = results.filter(r => r === 'Tài' || r === 'Xỉu');
+    if (validResults.length < 8) return null;
     
     // Phát hiện khi trend đang cực đoan
-    const last8 = results.slice(0, 8);
+    const last8 = validResults.slice(0, 8);
     const taiCount = last8.filter(r => r === 'Tài').length;
     
     if (taiCount >= 6) {
@@ -330,14 +364,14 @@ class TrendAnalyzer {
     
     // Phát hiện zigzag pattern
     let zigzagCount = 0;
-    for (let i = 2; i < Math.min(results.length, 10); i++) {
-      if (results[i-2] !== results[i-1] && results[i-1] !== results[i] && results[i-2] === results[i]) {
+    for (let i = 2; i < Math.min(validResults.length, 10); i++) {
+      if (validResults[i-2] !== validResults[i-1] && validResults[i-1] !== validResults[i] && validResults[i-2] === validResults[i]) {
         zigzagCount++;
       }
     }
     
     if (zigzagCount >= 3) {
-      const nextPrediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
+      const nextPrediction = validResults[0] === 'Tài' ? 'Xỉu' : 'Tài';
       return { prediction: nextPrediction, confidence: 62, name: 'Zigzag Pattern' };
     }
     
@@ -385,7 +419,7 @@ function transformApiData(apiData) {
 
 async function fetchDataHu() {
   try {
-    const response = await axios.get(API_URL_HU);
+    const response = await axios.get(API_URL_HU, { timeout: 10000 });
     return transformApiData(response.data);
   } catch (error) {
     console.error('Error fetching HU data:', error.message);
@@ -395,7 +429,7 @@ async function fetchDataHu() {
 
 async function fetchDataMd5() {
   try {
-    const response = await axios.get(API_URL_MD5);
+    const response = await axios.get(API_URL_MD5, { timeout: 10000 });
     return transformApiData(response.data);
   } catch (error) {
     console.error('Error fetching MD5 data:', error.message);
@@ -404,6 +438,7 @@ async function fetchDataMd5() {
 }
 
 function normalizeResult(result) {
+  if (!result) return 'unknown';
   if (result === 'Tài' || result === 'tài') return 'tai';
   if (result === 'Xỉu' || result === 'xỉu') return 'xiu';
   return result.toLowerCase();
@@ -411,7 +446,19 @@ function normalizeResult(result) {
 
 // ==================== SUPER PREDICTION ENGINE (NO MONTE CARLO) ====================
 function superPrediction(data, type) {
-  const results = data.slice(0, 30).map(d => d.Ket_qua);
+  // Lọc kết quả hợp lệ
+  const results = data.slice(0, 30).map(d => d.Ket_qua).filter(r => r === 'Tài' || r === 'Xỉu');
+  
+  if (results.length === 0) {
+    return { 
+      prediction: 'Tài', 
+      confidence: 55, 
+      factors: ['Insufficient data - default prediction'], 
+      modelPredictions: {},
+      weightedVotes: { Tài: 0, Xỉu: 0 } 
+    };
+  }
+  
   const neural = neuralRecognizers[type];
   const ensemble = ensembles[type];
   const trendAnalyzer = trendAnalyzers[type];
@@ -434,13 +481,17 @@ function superPrediction(data, type) {
     factors.push(`Pattern: ${patternPrediction.prediction} (${patternPrediction.confidence}%, ${patternPrediction.matchesFound} matches)`);
   }
   
-  // 2. Transition Matrix Analysis
-  const transitionPrediction = neural.predictFromTransition();
-  if (transitionPrediction) {
-    const weight = ensemble.modelWeights.transitionAnalyzer;
-    modelPredictions.transitionAnalyzer = transitionPrediction.prediction;
-    weightedVotes[transitionPrediction.prediction] += transitionPrediction.confidence * weight;
-    factors.push(`Transition: ${transitionPrediction.prediction} (${transitionPrediction.confidence}%)`);
+  // 2. Transition Matrix Analysis - FIXED with validation
+  try {
+    const transitionPrediction = neural.predictFromTransition();
+    if (transitionPrediction && transitionPrediction.prediction) {
+      const weight = ensemble.modelWeights.transitionAnalyzer;
+      modelPredictions.transitionAnalyzer = transitionPrediction.prediction;
+      weightedVotes[transitionPrediction.prediction] += transitionPrediction.confidence * weight;
+      factors.push(`Transition: ${transitionPrediction.prediction} (${transitionPrediction.confidence}%)`);
+    }
+  } catch (err) {
+    factors.push(`Transition: error (${err.message})`);
   }
   
   // 3. Break Point Detection
@@ -449,7 +500,7 @@ function superPrediction(data, type) {
     const weight = ensemble.modelWeights.breakDetector;
     modelPredictions.breakDetector = breakPrediction.prediction;
     weightedVotes[breakPrediction.prediction] += breakPrediction.confidence * weight;
-    factors.push(`Break: ${breakPrediction.prediction} (${breakPrediction.confidence}%, ${breakPrediction.reason})`);
+    factors.push(`Break: ${breakPrediction.prediction} (${breakPrediction.confidence}%, ${breakPrediction.reason || 'N/A'})`);
   }
   
   // 4. Trend Analysis
@@ -508,7 +559,7 @@ function superPrediction(data, type) {
   return { 
     prediction: finalPrediction, 
     confidence, 
-    factors, 
+    factors: factors.slice(0, 5), // Giới hạn số factor hiển thị
     modelPredictions,
     weightedVotes 
   };
@@ -524,7 +575,7 @@ async function verifyAndLearn(type, currentData) {
     if (pred.verified) continue;
     
     const actualResult = currentData.find(d => d.Phien.toString() === pred.phien);
-    if (actualResult) {
+    if (actualResult && actualResult.Ket_qua) {
       pred.verified = true;
       pred.actual = actualResult.Ket_qua;
       pred.isCorrect = pred.prediction === pred.actual;
@@ -578,8 +629,8 @@ function recordPrediction(type, phien, prediction, confidence, factors, modelPre
     phien: phien.toString(),
     prediction,
     confidence,
-    factors,
-    modelPredictions,
+    factors: factors || [],
+    modelPredictions: modelPredictions || {},
     timestamp: new Date().toISOString(),
     verified: false,
     actual: null,
@@ -622,7 +673,7 @@ function loadLearningData() {
       const data = fs.readFileSync(LEARNING_FILE, 'utf8');
       const parsed = JSON.parse(data);
       learningData = { ...learningData, ...parsed };
-      console.log('Learning data loaded');
+      console.log('✅ Learning data loaded');
     }
   } catch (error) {
     console.error('Error loading learning data:', error.message);
@@ -636,7 +687,7 @@ function loadPredictionHistory() {
       const parsed = JSON.parse(data);
       predictionHistory = parsed.history || { hu: [], md5: [] };
       lastProcessedPhien = parsed.lastProcessedPhien || { hu: null, md5: null };
-      console.log('Prediction history loaded');
+      console.log('✅ Prediction history loaded');
     }
   } catch (error) {
     console.error('Error loading prediction history:', error.message);
@@ -696,7 +747,7 @@ async function autoProcessPredictions() {
 // ==================== EXPRESS ROUTES ====================
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.send('kapub - Super AI Prediction Engine');
+  res.send('kapub - Super AI Prediction Engine v7.1 - Fixed');
 });
 
 app.get('/lc79-hu', async (req, res) => {
@@ -717,7 +768,7 @@ app.get('/lc79-hu', async (req, res) => {
     });
   } catch (error) {
     console.error('Error:', error);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error: ' + error.message });
   }
 });
 
@@ -739,7 +790,7 @@ app.get('/lc79-md5', async (req, res) => {
     });
   } catch (error) {
     console.error('Error:', error);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error: ' + error.message });
   }
 });
 
@@ -752,7 +803,7 @@ app.get('/lc79-hu/lichsu', async (req, res) => {
       return {
         ...record,
         ket_qua_thuc_te: prediction?.actual || null,
-        status: prediction?.isCorrect === true ? '✅' : (prediction?.isCorrect === false ? '❌' : null)
+        status: prediction?.isCorrect === true ? '✅' : (prediction?.isCorrect === false ? '❌' : '⏳')
       };
     });
     res.json({ type: 'Lẩu Cua 79 - Tài Xỉu Hũ', history: historyWithStatus, total: historyWithStatus.length });
@@ -770,7 +821,7 @@ app.get('/lc79-md5/lichsu', async (req, res) => {
       return {
         ...record,
         ket_qua_thuc_te: prediction?.actual || null,
-        status: prediction?.isCorrect === true ? '✅' : (prediction?.isCorrect === false ? '❌' : null)
+        status: prediction?.isCorrect === true ? '✅' : (prediction?.isCorrect === false ? '❌' : '⏳')
       };
     });
     res.json({ type: 'Lẩu Cua 79 - Tài Xỉu MD5', history: historyWithStatus, total: historyWithStatus.length });
@@ -795,10 +846,11 @@ app.get('/lc79-hu/analysis', async (req, res) => {
       modelWeights: ensembles.hu.modelWeights,
       recentAccuracy: `${(ensembles.hu.getRecentAccuracy() * 100).toFixed(1)}%`,
       overallAccuracy: `${accuracy}%`,
-      consecutiveLosses: ensembles.hu.consecutiveLosses
+      consecutiveLosses: ensembles.hu.consecutiveLosses,
+      consecutiveWins: ensembles.hu.consecutiveWins
     });
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error: ' + error.message });
   }
 });
 
@@ -818,10 +870,11 @@ app.get('/lc79-md5/analysis', async (req, res) => {
       modelWeights: ensembles.md5.modelWeights,
       recentAccuracy: `${(ensembles.md5.getRecentAccuracy() * 100).toFixed(1)}%`,
       overallAccuracy: `${accuracy}%`,
-      consecutiveLosses: ensembles.md5.consecutiveLosses
+      consecutiveLosses: ensembles.md5.consecutiveLosses,
+      consecutiveWins: ensembles.md5.consecutiveWins
     });
   } catch (error) {
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Server error: ' + error.message });
   }
 });
 
@@ -880,8 +933,8 @@ setTimeout(() => autoProcessPredictions(), 3000);
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
-  console.log(`║     LẨU CUA 79 - SUPER AI PREDICTION ENGINE v7.0              ║`);
-  console.log(`║     NO MONTE CARLO - PURE NEURAL LEARNING                      ║`);
+  console.log(`║     LẨU CUA 79 - SUPER AI PREDICTION ENGINE v7.1              ║`);
+  console.log(`║     NO MONTE CARLO - PURE NEURAL LEARNING (FIXED)             ║`);
   console.log(`╚══════════════════════════════════════════════════════════════════╝\n`);
   console.log(`🚀 Server: http://0.0.0.0:${PORT}`);
   console.log(`\n🧠 AI COMPONENTS (Monte Carlo REMOVED):`);
@@ -902,5 +955,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   GET  /lc79-hu/learning  - Thống kê học tập Hũ`);
   console.log(`   GET  /lc79-md5/learning - Thống kê học tập MD5`);
   console.log(`   POST /reset-learning    - Reset toàn bộ AI models\n`);
-  console.log(`🔥 ĐÃ LOẠI BỎ MONTE CARLO - THAY BẰNG SUPER LEARNING AI!`);
+  console.log(`🔥 FIXED: Lỗi truy cập transition matrix - ĐÃ SỬA!`);
 });
