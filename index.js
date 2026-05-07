@@ -27,18 +27,15 @@ class PsychologyAnalyzer {
         this.playerBehavior = [];
     }
     
-    // Phân tích chu kỳ "dụ" người chơi
     analyzeTrapPattern(results) {
         if (results.length < 8) return null;
         
-        // Nhà cái thường tạo cầu đẹp 3-4 phiên để dụ, sau đó bẻ
         let perfectStreak = 0;
         for (let i = 0; i < Math.min(6, results.length - 1); i++) {
             if (results[i] === results[i+1]) perfectStreak++;
             else break;
         }
         
-        // Cầu 1-1 đẹp cũng là bẫy
         let alternatingStreak = 0;
         for (let i = 0; i < Math.min(8, results.length - 1); i++) {
             if (results[i] !== results[i+1]) alternatingStreak++;
@@ -60,7 +57,7 @@ class PsychologyAnalyzer {
                 detected: true,
                 type: 'alternating_trap',
                 message: `Cầu đảo ${alternatingStreak + 1} phiên - nhà cái sắp tạo bệt!`,
-                prediction: results[0], // Theo cầu đảo thì vẫn đảo tiếp
+                prediction: results[0],
                 confidence: 60 + alternatingStreak
             };
         }
@@ -68,14 +65,12 @@ class PsychologyAnalyzer {
         return null;
     }
     
-    // Phân tích tâm lý đám đông
     analyzeCrowdPsychology(results, data) {
         if (results.length < 10) return null;
         
         const taiCount = results.filter(r => r === 'Tài').length;
         const taiRatio = taiCount / results.length;
         
-        // Khi Tài/Xỉu quá chênh lệch, nhà cái thường cân bằng
         if (taiRatio > 0.7) {
             return {
                 detected: true,
@@ -99,17 +94,12 @@ class PsychologyAnalyzer {
         return null;
     }
     
-    // Phân tích thời điểm "xả kèo"
     analyzeReleasePoint(results, hour) {
-        // Giờ cao điểm (19h-23h) nhà cái thường an toàn
-        // Giờ thấp điểm (2h-6h) nhà cái thường "xả"
-        
         const isLowHour = hour >= 2 && hour <= 6;
         const isPeakHour = hour >= 19 && hour <= 23;
         
         if (isLowHour && results.length > 5) {
             const recentTai = results.slice(0, 5).filter(r => r === 'Tài').length;
-            // Giờ thấp điểm, nhà cái thường tạo cầu ngược lại xu hướng
             if (recentTai >= 3) {
                 return {
                     detected: true,
@@ -130,7 +120,6 @@ class PsychologyAnalyzer {
         }
         
         if (isPeakHour) {
-            // Giờ cao điểm, nhà cái an toàn - theo xu hướng
             const lastResult = results[0];
             return {
                 detected: true,
@@ -151,14 +140,11 @@ class BreakPatternAnalyzer {
         this.breakHistory = [];
     }
     
-    // Phát hiện thời điểm bẻ cầu
     detectBreakPoint(results) {
         if (results.length < 6) return null;
         
-        // Pattern bẻ cầu kinh điển: 3-1-1 hoặc 2-2-1-1
         const pattern = results.slice(0, 6);
         
-        // 3-1-1: 3 cái giống + 1 khác + 1 trùng với cái thứ 5
         if (pattern[0] === pattern[1] && pattern[1] === pattern[2] &&
             pattern[2] !== pattern[3] &&
             pattern[3] === pattern[4] && pattern[4] !== pattern[5]) {
@@ -171,7 +157,6 @@ class BreakPatternAnalyzer {
             };
         }
         
-        // 2-2-1-1: 2 cặp + 1 khác + 1 trùng
         if (pattern[0] === pattern[1] &&
             pattern[2] === pattern[3] &&
             pattern[0] !== pattern[2] &&
@@ -185,7 +170,6 @@ class BreakPatternAnalyzer {
             };
         }
         
-        // Dấu hiệu mệt cầu: đan xen 2-1-2-1
         if (pattern[0] !== pattern[1] && pattern[1] !== pattern[2] &&
             pattern[2] !== pattern[3] && pattern[3] !== pattern[4] &&
             pattern[0] === pattern[2] && pattern[2] === pattern[4]) {
@@ -201,7 +185,6 @@ class BreakPatternAnalyzer {
         return null;
     }
     
-    // Phân tích độ dài cầu để dự đoán bẻ
     analyzeStreakBreak(results) {
         if (results.length < 4) return null;
         
@@ -213,9 +196,8 @@ class BreakPatternAnalyzer {
             else break;
         }
         
-        // Thống kê: Cầu bệt thường bẻ ở phiên thứ 4-5-6
         if (streak >= 3 && streak <= 5) {
-            const breakChance = (streak - 2) * 15; // 3->15%, 4->30%, 5->45%
+            const breakChance = (streak - 2) * 15;
             if (Math.random() * 100 < breakChance + 20) {
                 return {
                     detected: true,
@@ -227,7 +209,6 @@ class BreakPatternAnalyzer {
             }
         }
         
-        // Cầu quá dài (>=6) - chắc chắn bẻ
         if (streak >= 6) {
             return {
                 detected: true,
@@ -246,7 +227,6 @@ class BreakPatternAnalyzer {
 class DiceExpertAnalyzer {
     constructor() {}
     
-    // Phân tích xu hướng từng mặt xúc xắc
     analyzeDiceTrends(data) {
         if (data.length < 10) return null;
         
@@ -265,7 +245,6 @@ class DiceExpertAnalyzer {
         const avgDice2Trend = dice2Trend.reduce((a,b) => a+b, 0) / dice2Trend.length;
         const avgDice3Trend = dice3Trend.reduce((a,b) => a+b, 0) / dice3Trend.length;
         
-        // Nếu cả 3 xu hướng cùng giảm -> sắp có tổng thấp -> Tài
         if (avgDice1Trend < -0.3 && avgDice2Trend < -0.3 && avgDice3Trend < -0.3) {
             return {
                 detected: true,
@@ -276,7 +255,6 @@ class DiceExpertAnalyzer {
             };
         }
         
-        // Nếu cả 3 cùng tăng -> sắp có tổng cao -> Xỉu
         if (avgDice1Trend > 0.3 && avgDice2Trend > 0.3 && avgDice3Trend > 0.3) {
             return {
                 detected: true,
@@ -290,15 +268,12 @@ class DiceExpertAnalyzer {
         return null;
     }
     
-    // Phân tích tổng điểm đặc biệt
     analyzeSpecialSums(data) {
         if (data.length < 5) return null;
         
         const recentSums = data.slice(0, 5).map(d => d.Tong);
         const sum3 = recentSums[0] + recentSums[1] + recentSums[2];
-        const sum5 = recentSums.reduce((a,b) => a+b, 0);
         
-        // Tổng 3 phiên gần nhất quá cao hoặc quá thấp
         if (sum3 >= 40) {
             return {
                 detected: true,
@@ -323,7 +298,7 @@ class DiceExpertAnalyzer {
     }
 }
 
-// ==================== PATTERN DETECTORS (GIỮ NGUYÊN NHƯNG SỬA LOGIC) ====================
+// ==================== CÁC HÀM PHÂN TÍCH PATTERN ====================
 
 function analyzeCauBet(results, type) {
     if (results.length < 3) return { detected: false };
@@ -336,11 +311,8 @@ function analyzeCauBet(results, type) {
         else break;
     }
     
-    // SỬA: Cầu bệt cần xem xét bẻ hay theo
     if (streakLength >= 3) {
-        // Nếu là phiên thứ 3-4-5: CÂN NHẮC BẺ
         if (streakLength >= 3 && streakLength <= 5) {
-            // 40% theo, 60% bẻ (tối ưu từ thống kê thực tế)
             const shouldBreak = Math.random() < 0.6;
             return {
                 detected: true,
@@ -352,7 +324,6 @@ function analyzeCauBet(results, type) {
             };
         }
         
-        // Nếu >= 6: CHẮC CHẮN BẺ
         if (streakLength >= 6) {
             return {
                 detected: true,
@@ -377,9 +348,7 @@ function analyzeCauDao11(results, type) {
         else break;
     }
     
-    // SỬA: Cầu đảo cần xem xét bẻ
     if (alternatingLength >= 4) {
-        // Cầu đảo dài 6-7 phiên thường bị bẻ
         const shouldBreak = alternatingLength >= 6;
         
         return {
@@ -411,7 +380,6 @@ function analyzeCau22(results, type) {
     
     if (pairCount >= 2) {
         const lastPairType = pattern[pattern.length - 1];
-        // Cầu 2-2 thường bẻ sau 2-3 cặp
         const shouldBreak = pairCount >= 2;
         
         return {
@@ -443,9 +411,6 @@ function analyzeCau33(results, type) {
     
     if (tripleCount >= 1) {
         const lastTripleType = pattern[pattern.length - 1];
-        // Cầu 3-3 chắc chắn bẻ sau 1-2 bộ
-        const shouldBreak = true;
-        
         return {
             detected: true,
             tripleCount,
@@ -458,24 +423,461 @@ function analyzeCau33(results, type) {
     return { detected: false };
 }
 
-// ==================== PATTERN REMAINING (GIỮ NGUYÊN CÁC HÀM KHÁC) ====================
-// ... (các hàm analyzeCau121, analyzeCau123, analyzeCau321, analyzeCauNhayCoc, 
-// analyzeCauNhipNghieng, analyzeCau3Van1, analyzeCauBeCau, detectCyclePattern,
-// analyzeCau44, analyzeCau55, analyzeCau212, analyzeCau1221, analyzeCau2112,
-// analyzeCauGap, analyzeCauZiczac, analyzeCauDoi, analyzeCauRong, analyzeSmartBet,
-// analyzeDistribution, analyzeDicePatterns, analyzeSumTrend, analyzeRecentMomentum,
-// analyzeEdgeCases, analyzeFibonacciPattern, analyzeMomentumPattern,
-// analyzeResistanceSupport, analyzeWavePattern, analyzeGoldenRatio,
-// analyzeBreakPatternAdvanced, analyzeBreakStreak, analyzeAlternatingBreak,
-// analyzeDoublePairBreak, analyzeTriplePattern giữ nguyên từ code cũ)
+function analyzeCau44(results, type) {
+    if (results.length < 8) return { detected: false };
+    
+    let quadCount = 0;
+    let i = 0;
+    let pattern = [];
+    
+    while (i < results.length - 3 && quadCount < 3) {
+        if (results[i] === results[i + 1] && results[i + 1] === results[i + 2] && results[i + 2] === results[i + 3]) {
+            pattern.push(results[i]);
+            quadCount++;
+            i += 4;
+        } else break;
+    }
+    
+    if (quadCount >= 1) {
+        const lastQuadType = pattern[pattern.length - 1];
+        return {
+            detected: true,
+            quadCount,
+            prediction: lastQuadType === 'Tài' ? 'Xỉu' : 'Tài',
+            confidence: 75 + quadCount * 3,
+            name: `Cầu 4-4 (${quadCount} bộ bốn) - BẺ`
+        };
+    }
+    
+    return { detected: false };
+}
 
-// ==================== HÀM CHÍNH TỐI ƯU ====================
+function analyzeCau55(results, type) {
+    if (results.length < 10) return { detected: false };
+    
+    let quintCount = 0;
+    let i = 0;
+    let pattern = [];
+    
+    while (i < results.length - 4 && quintCount < 2) {
+        if (results[i] === results[i + 1] && results[i + 1] === results[i + 2] && 
+            results[i + 2] === results[i + 3] && results[i + 3] === results[i + 4]) {
+            pattern.push(results[i]);
+            quintCount++;
+            i += 5;
+        } else break;
+    }
+    
+    if (quintCount >= 1) {
+        const lastQuintType = pattern[pattern.length - 1];
+        return {
+            detected: true,
+            quintCount,
+            prediction: lastQuintType === 'Tài' ? 'Xỉu' : 'Tài',
+            confidence: 80,
+            name: `Cầu 5-5 (${quintCount} bộ năm) - BẺ MẠNH`
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCau121(results, type) {
+    if (results.length < 4) return { detected: false };
+    
+    const pattern = results.slice(0, 4);
+    if (pattern[0] !== pattern[1] && pattern[1] === pattern[2] && pattern[2] !== pattern[3] && pattern[0] === pattern[3]) {
+        return {
+            detected: true,
+            pattern: '1-2-1',
+            prediction: pattern[0],
+            confidence: 68,
+            name: 'Cầu 1-2-1'
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCau123(results, type) {
+    if (results.length < 6) return { detected: false };
+    
+    const pattern = results.slice(0, 6);
+    if (pattern[0] === pattern[1] && pattern[1] === pattern[2] &&
+        pattern[3] === pattern[4] && pattern[2] !== pattern[3] && pattern[4] !== pattern[5]) {
+        return {
+            detected: true,
+            pattern: '1-2-3',
+            prediction: pattern[5] === 'Tài' ? 'Xỉu' : 'Tài',
+            confidence: 70,
+            name: 'Cầu 1-2-3'
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCau321(results, type) {
+    if (results.length < 6) return { detected: false };
+    
+    const pattern = results.slice(0, 6);
+    if (pattern[0] === pattern[1] && pattern[1] === pattern[2] &&
+        pattern[3] === pattern[4] && pattern[2] !== pattern[3] && pattern[5] !== pattern[4]) {
+        return {
+            detected: true,
+            pattern: '3-2-1',
+            prediction: pattern[3],
+            confidence: 70,
+            name: 'Cầu 3-2-1'
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCau212(results, type) {
+    if (results.length < 5) return { detected: false };
+    
+    const pattern = results.slice(0, 5);
+    if (pattern[0] === pattern[1] && pattern[1] !== pattern[2] &&
+        pattern[2] === pattern[3] && pattern[3] === pattern[4] && pattern[0] !== pattern[2]) {
+        return {
+            detected: true,
+            pattern: '2-1-2',
+            prediction: pattern[0],
+            confidence: 68,
+            name: 'Cầu 2-1-2'
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCauNhayCoc(results, type) {
+    if (results.length < 6) return { detected: false };
+    
+    const skipPattern = [];
+    for (let i = 0; i < Math.min(results.length, 10); i += 2) {
+        skipPattern.push(results[i]);
+    }
+    
+    if (skipPattern.length >= 3) {
+        const allSame = skipPattern.slice(0, 3).every(r => r === skipPattern[0]);
+        if (allSame) {
+            return {
+                detected: true,
+                prediction: skipPattern[0],
+                confidence: 65,
+                name: 'Cầu Nhảy Cóc'
+            };
+        }
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCauNhipNghieng(results, type) {
+    if (results.length < 5) return { detected: false };
+    
+    const last5 = results.slice(0, 5);
+    const taiCount5 = last5.filter(r => r === 'Tài').length;
+    
+    if (taiCount5 >= 4) {
+        return {
+            detected: true,
+            prediction: 'Xỉu',
+            confidence: 65,
+            name: 'Cầu Nhịp Nghiêng - Bẻ Tài'
+        };
+    } else if (taiCount5 <= 1) {
+        return {
+            detected: true,
+            prediction: 'Tài',
+            confidence: 65,
+            name: 'Cầu Nhịp Nghiêng - Bẻ Xỉu'
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCau3Van1(results, type) {
+    if (results.length < 4) return { detected: false };
+    
+    const last4 = results.slice(0, 4);
+    const taiCount = last4.filter(r => r === 'Tài').length;
+    
+    if (taiCount === 3) {
+        return {
+            detected: true,
+            prediction: 'Xỉu',
+            confidence: 70,
+            name: 'Cầu 3 Ván 1 (3T-1X) - Bẻ'
+        };
+    } else if (taiCount === 1) {
+        return {
+            detected: true,
+            prediction: 'Tài',
+            confidence: 70,
+            name: 'Cầu 3 Ván 1 (3X-1T) - Bẻ'
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCauBeCau(results, type) {
+    if (results.length < 8) return { detected: false };
+    
+    let streakType = results[0];
+    let streakLength = 1;
+    for (let i = 1; i < results.length; i++) {
+        if (results[i] === streakType) streakLength++;
+        else break;
+    }
+    
+    if (streakLength >= 4) {
+        return {
+            detected: true,
+            prediction: streakType === 'Tài' ? 'Xỉu' : 'Tài',
+            confidence: 72,
+            name: 'Cầu Bẻ Cầu'
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCauRong(results, type) {
+    if (results.length < 6) return { detected: false };
+    
+    let streakLength = 1;
+    for (let i = 1; i < results.length; i++) {
+        if (results[i] === results[0]) streakLength++;
+        else break;
+    }
+    
+    if (streakLength >= 6) {
+        return {
+            detected: true,
+            streakLength,
+            prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài',
+            confidence: 78,
+            name: `Cầu Rồng ${streakLength} phiên - BẺ MẠNH`
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCauDoi(results, type) {
+    if (results.length < 4) return { detected: false };
+    
+    let pairChanges = 0;
+    let i = 0;
+    
+    while (i < results.length - 1 && pairChanges < 3) {
+        if (results[i] === results[i + 1]) {
+            pairChanges++;
+            i += 2;
+        } else break;
+    }
+    
+    if (pairChanges >= 2) {
+        const isAlternatingPairs = results[0] !== results[2];
+        if (isAlternatingPairs) {
+            return {
+                detected: true,
+                pairChanges,
+                prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài',
+                confidence: 68,
+                name: 'Cầu Đôi Đảo'
+            };
+        } else {
+            return {
+                detected: true,
+                pairChanges,
+                prediction: results[0],
+                confidence: 62,
+                name: 'Cầu Đôi Bệt'
+            };
+        }
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCauGap(results, type) {
+    if (results.length < 6) return { detected: false };
+    
+    for (let gapSize = 2; gapSize <= 3; gapSize++) {
+        let patternFound = true;
+        const referenceType = results[0];
+        
+        for (let i = 0; i < Math.min(results.length, 10); i += (gapSize + 1)) {
+            if (results[i] !== referenceType) {
+                patternFound = false;
+                break;
+            }
+        }
+        
+        if (patternFound && results.length >= (gapSize + 1) * 2) {
+            return {
+                detected: true,
+                gapSize,
+                prediction: referenceType === 'Tài' ? 'Xỉu' : 'Tài',
+                confidence: 65,
+                name: `Cầu Gấp ${gapSize + 1}`
+            };
+        }
+    }
+    
+    return { detected: false };
+}
+
+function analyzeCauZiczac(results, type) {
+    if (results.length < 6) return { detected: false };
+    
+    let zigzagCount = 0;
+    for (let i = 0; i < results.length - 2; i++) {
+        if (results[i] !== results[i + 1] && results[i + 1] !== results[i + 2] && results[i] === results[i + 2]) {
+            zigzagCount++;
+        } else break;
+    }
+    
+    if (zigzagCount >= 3) {
+        return {
+            detected: true,
+            zigzagCount,
+            prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài',
+            confidence: 70,
+            name: 'Cầu Ziczac - Bẻ'
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeSmartBet(results, type) {
+    if (results.length < 10) return { detected: false };
+    
+    const last5 = results.slice(0, 5);
+    const prev5 = results.slice(5, 10);
+    
+    const taiLast5 = last5.filter(r => r === 'Tài').length;
+    const taiPrev5 = prev5.filter(r => r === 'Tài').length;
+    
+    const trendChanging = (taiLast5 >= 4 && taiPrev5 <= 1) || (taiLast5 <= 1 && taiPrev5 >= 4);
+    
+    if (trendChanging) {
+        const currentDominant = taiLast5 >= 4 ? 'Tài' : 'Xỉu';
+        return {
+            detected: true,
+            trendChange: true,
+            prediction: currentDominant === 'Tài' ? 'Xỉu' : 'Tài',
+            confidence: 75,
+            name: 'Smart Bet - Đảo chiều xu hướng'
+        };
+    }
+    
+    const taiLast10 = results.slice(0, 10).filter(r => r === 'Tài').length;
+    if (taiLast10 >= 8 || taiLast10 <= 2) {
+        const dominant = taiLast10 >= 8 ? 'Tài' : 'Xỉu';
+        return {
+            detected: true,
+            extreme: true,
+            prediction: dominant === 'Tài' ? 'Xỉu' : 'Tài',
+            confidence: 72,
+            name: 'Smart Bet - Xu hướng cực đoan'
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeBreakStreak(results, type) {
+    if (results.length < 4) return { detected: false };
+    
+    let streakType = results[0];
+    let streakLength = 1;
+    for (let i = 1; i < results.length; i++) {
+        if (results[i] === streakType) streakLength++;
+        else break;
+    }
+    
+    if (streakLength >= 4) {
+        return {
+            detected: true,
+            type: 'break_streak',
+            prediction: streakType === 'Tài' ? 'Xỉu' : 'Tài',
+            confidence: 65 + Math.min(20, streakLength * 2),
+            name: `Break Streak - Bẻ chuỗi ${streakLength}`
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeAlternatingBreak(results, type) {
+    if (results.length < 6) return { detected: false };
+    
+    let alternatingCount = 0;
+    for (let i = 0; i < results.length - 1; i++) {
+        if (results[i] !== results[i + 1]) alternatingCount++;
+        else break;
+    }
+    
+    if (alternatingCount >= 5) {
+        return {
+            detected: true,
+            type: 'alternating_break',
+            prediction: results[0],
+            confidence: 68,
+            name: `Alternating Break - Kết thúc đảo ${alternatingCount + 1}`
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeBreakPatternAdvanced(results, type) {
+    if (results.length < 6) return { detected: false };
+    
+    const pattern = results.slice(0, 6);
+    
+    if (pattern[0] !== pattern[1] && pattern[1] !== pattern[2] &&
+        pattern[2] === pattern[3] && pattern[3] === pattern[4] && pattern[4] !== pattern[5]) {
+        return {
+            detected: true,
+            type: 'pattern_11221',
+            prediction: pattern[2] === 'Tài' ? 'Xỉu' : 'Tài',
+            confidence: 72,
+            name: 'Break Pattern 1-1-2-2-1'
+        };
+    }
+    
+    return { detected: false };
+}
+
+function analyzeDistribution(data, type) {
+    if (data.length < 20) return null;
+    
+    const taiCount = data.slice(0, 20).filter(d => d.Ket_qua === 'Tài').length;
+    const imbalance = Math.abs(taiCount - 10) / 20;
+    
+    return {
+        taiPercent: (taiCount / 20) * 100,
+        xiuPercent: ((20 - taiCount) / 20) * 100,
+        imbalance: imbalance
+    };
+}
+
+// ==================== HÀM CHÍNH ====================
 function calculateAdvancedPrediction(data, type) {
     const last50 = data.slice(0, 50);
     const results = last50.map(d => d.Ket_qua);
     const hour = new Date().getHours();
     
-    // Khởi tạo analyzers
     const psychologyAnalyzer = new PsychologyAnalyzer();
     const breakAnalyzer = new BreakPatternAnalyzer();
     const diceAnalyzer = new DiceExpertAnalyzer();
@@ -483,7 +885,7 @@ function calculateAdvancedPrediction(data, type) {
     let predictions = [];
     let factors = [];
     
-    // 1. PHÂN TÍCH TÂM LÝ NHÀ CÁI (ƯU TIÊN CAO NHẤT)
+    // 1. PHÂN TÍCH TÂM LÝ NHÀ CÁI
     const trapPattern = psychologyAnalyzer.analyzeTrapPattern(results);
     if (trapPattern) {
         predictions.push({
@@ -540,7 +942,7 @@ function calculateAdvancedPrediction(data, type) {
         factors.push(streakBreak.message);
     }
     
-    // 3. PHÂN TÍCH XÚC XẮC CHUYÊN SÂU
+    // 3. PHÂN TÍCH XÚC XẮC
     const diceTrend = diceAnalyzer.analyzeDiceTrends(last50);
     if (diceTrend) {
         predictions.push({
@@ -563,75 +965,30 @@ function calculateAdvancedPrediction(data, type) {
         factors.push(specialSums.message);
     }
     
-    // 4. CÁC PATTERN CẦU CƠ BẢN (CHỈ LẤY NHỮNG CÁI CÓ CONFIDENCE CAO)
-    const cauBet = analyzeCauBet(results, type);
-    if (cauBet.detected) {
-        predictions.push({
-            prediction: cauBet.prediction,
-            confidence: cauBet.confidence,
-            priority: 10,
-            name: cauBet.name
-        });
-        factors.push(cauBet.name);
+    // 4. CÁC PATTERN CẦU
+    const patterns = [
+        analyzeCauBet, analyzeCauDao11, analyzeCau22, analyzeCau33,
+        analyzeCau44, analyzeCau55, analyzeCau121, analyzeCau123,
+        analyzeCau321, analyzeCau212, analyzeCauNhayCoc, analyzeCauNhipNghieng,
+        analyzeCau3Van1, analyzeCauBeCau, analyzeCauRong, analyzeCauDoi,
+        analyzeCauGap, analyzeCauZiczac, analyzeSmartBet, analyzeBreakStreak,
+        analyzeAlternatingBreak, analyzeBreakPatternAdvanced
+    ];
+    
+    for (const patternFn of patterns) {
+        const result = patternFn(results, type);
+        if (result && result.detected) {
+            predictions.push({
+                prediction: result.prediction,
+                confidence: result.confidence,
+                priority: 8,
+                name: result.name
+            });
+            factors.push(result.name);
+        }
     }
     
-    const cauDao11 = analyzeCauDao11(results, type);
-    if (cauDao11.detected) {
-        predictions.push({
-            prediction: cauDao11.prediction,
-            confidence: cauDao11.confidence,
-            priority: 9,
-            name: cauDao11.name
-        });
-        factors.push(cauDao11.name);
-    }
-    
-    const cau22 = analyzeCau22(results, type);
-    if (cau22.detected) {
-        predictions.push({
-            prediction: cau22.prediction,
-            confidence: cau22.confidence,
-            priority: 9,
-            name: cau22.name
-        });
-        factors.push(cau22.name);
-    }
-    
-    const cau33 = analyzeCau33(results, type);
-    if (cau33.detected) {
-        predictions.push({
-            prediction: cau33.prediction,
-            confidence: cau33.confidence,
-            priority: 10,
-            name: cau33.name
-        });
-        factors.push(cau33.name);
-    }
-    
-    // 5. PATTERN ĐẢO CHIỀU KHÁC
-    const smartBet = analyzeSmartBet(results, type);
-    if (smartBet.detected) {
-        predictions.push({
-            prediction: smartBet.prediction,
-            confidence: smartBet.confidence,
-            priority: 11,
-            name: smartBet.name
-        });
-        factors.push(smartBet.name);
-    }
-    
-    const breakStreak = analyzeBreakStreak(results, type);
-    if (breakStreak.detected) {
-        predictions.push({
-            prediction: breakStreak.prediction,
-            confidence: breakStreak.confidence,
-            priority: 12,
-            name: breakStreak.name
-        });
-        factors.push(breakStreak.name);
-    }
-    
-    // 6. PHÂN BỐ VÀ XU HƯỚNG
+    // 5. PHÂN BỐ
     const distribution = analyzeDistribution(last50, type);
     if (distribution && distribution.imbalance > 0.25) {
         const minority = distribution.taiPercent < 50 ? 'Tài' : 'Xỉu';
@@ -639,53 +996,45 @@ function calculateAdvancedPrediction(data, type) {
             prediction: minority,
             confidence: 60,
             priority: 6,
-            name: `Cân bằng phân bố (T:${distribution.taiPercent.toFixed(0)}% - X:${distribution.xiuPercent.toFixed(0)}%)`
+            name: `Cân bằng phân bố (T:${distribution.taiPercent.toFixed(0)}%)`
         });
         factors.push(`Phân bố lệch về ${minority === 'Tài' ? 'Xỉu' : 'Tài'}`);
     }
     
-    // 7. FALLBACK: NẾU KHÔNG CÓ PATTERN NÀO, DÙNG CHIẾN LƯỢC THÔNG MINH
+    // 6. FALLBACK
     if (predictions.length === 0) {
-        // Chiến lược fallback: đan xen Tài/Xỉu theo chu kỳ
         const lastResult = results[0];
         const taiCount = results.slice(0, 10).filter(r => r === 'Tài').length;
         
-        // Nếu 10 phiên gần nhất quá lệch, chọn cửa ngược lại
         if (taiCount >= 7) {
             predictions.push({
                 prediction: 'Xỉu',
                 confidence: 65,
                 priority: 5,
-                name: 'Fallback: 10 phiên quá nhiều Tài → chọn Xỉu'
+                name: 'Fallback: 10 phiên quá nhiều Tài → Xỉu'
             });
-            factors.push('10 phiên có 7+ Tài → Xỉu');
         } else if (taiCount <= 3) {
             predictions.push({
                 prediction: 'Tài',
                 confidence: 65,
                 priority: 5,
-                name: 'Fallback: 10 phiên quá nhiều Xỉu → chọn Tài'
+                name: 'Fallback: 10 phiên quá nhiều Xỉu → Tài'
             });
-            factors.push('10 phiên có 7+ Xỉu → Tài');
         } else {
-            // Mặc định: đan xen
             predictions.push({
                 prediction: lastResult === 'Tài' ? 'Xỉu' : 'Tài',
                 confidence: 55,
                 priority: 5,
-                name: 'Fallback: Đan xen theo cầu'
+                name: 'Fallback: Đan xen theo phiên trước'
             });
-            factors.push('Đan xen theo phiên trước');
         }
     }
     
     // TỔNG HỢP KẾT QUẢ
     predictions.sort((a, b) => b.priority - a.priority);
     
-    let taiScore = 0;
-    let xiuScore = 0;
-    
-    for (const pred of predictions.slice(0, 7)) { // Chỉ lấy top 7 pattern
+    let taiScore = 0, xiuScore = 0;
+    for (const pred of predictions.slice(0, 8)) {
         const weight = pred.priority;
         if (pred.prediction === 'Tài') {
             taiScore += pred.confidence * weight;
@@ -694,21 +1043,18 @@ function calculateAdvancedPrediction(data, type) {
         }
     }
     
-    // Thêm yếu tố ngẫu nhiên nhỏ để tránh "chết" theo một chiều
-    const randomFactor = (Math.random() * 8) - 4; // -2 đến +2
+    const randomFactor = (Math.random() * 8) - 4;
     if (randomFactor > 0) taiScore += randomFactor * 10;
     else xiuScore += Math.abs(randomFactor) * 10;
     
     let finalPrediction = taiScore >= xiuScore ? 'Tài' : 'Xỉu';
-    let confidence = Math.min(88, Math.max(58, 
-        50 + (Math.abs(taiScore - xiuScore) / (taiScore + xiuScore)) * 40
+    let confidence = Math.min(88, Math.max(58,
+        50 + (Math.abs(taiScore - xiuScore) / (taiScore + xiuScore + 0.01)) * 40
     ));
     
-    // ĐIỀU CHỈNH CONFIDENCE DỰA TRÊN SỐ LƯỢNG PATTERN
     if (predictions.length >= 5) confidence += 5;
     if (predictions.length >= 8) confidence += 3;
     
-    // GHI LOG ĐỂ DEBUG
     console.log(`[${type.toUpperCase()}] Patterns: ${predictions.length} | Top: ${predictions[0]?.name || 'N/A'} | Result: ${finalPrediction} (${Math.round(confidence)}%)`);
     
     return {
@@ -719,7 +1065,7 @@ function calculateAdvancedPrediction(data, type) {
     };
 }
 
-// ==================== CÁC HÀM HỖ TRỢ (GIỮ NGUYÊN) ====================
+// ==================== HÀM HỖ TRỢ ====================
 
 function transformApiData(apiData) {
     if (!apiData || !apiData.list || !Array.isArray(apiData.list)) return null;
@@ -773,8 +1119,6 @@ function savePredictionToHistory(type, phien, prediction, confidence) {
     }
     return record;
 }
-
-// ==================== VERIFICATION & LEARNING ====================
 
 let learningData = {
     hu: { predictions: [], total: 0, correct: 0 },
@@ -845,7 +1189,6 @@ async function verifyPredictions(type, currentData) {
             if (pred.isCorrect) learningData[type].correct++;
             updated = true;
             
-            // Update history with result
             const historyEntry = predictionHistory[type].find(h => h.phien_hien_tai === pred.phien);
             if (historyEntry) {
                 historyEntry.ket_qua_thuc_te = pred.actual;
@@ -905,7 +1248,7 @@ async function autoProcessPredictions() {
 
 app.get('/', (req, res) => {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.send('Lau Cua 79 - Tai Xiu Prediction API v5.0 - Optimized for 60-70% Win Rate');
+    res.send('Lau Cua 79 - Tai Xiu Prediction API v5.0 - Fixed');
 });
 
 app.get('/lc79-hu', async (req, res) => {
@@ -1021,8 +1364,7 @@ app.get('/lc79-hu/learning', (req, res) => {
         totalPredictions: learningData.hu.total,
         correctPredictions: learningData.hu.correct,
         accuracy: `${acc}%`,
-        targetAccuracy: '60-70%',
-        status: acc >= 60 ? '🎯 Đang đạt mục tiêu!' : '📈 Đang cải thiện...'
+        targetAccuracy: '60-70%'
     });
 });
 
@@ -1033,8 +1375,7 @@ app.get('/lc79-md5/learning', (req, res) => {
         totalPredictions: learningData.md5.total,
         correctPredictions: learningData.md5.correct,
         accuracy: `${acc}%`,
-        targetAccuracy: '60-70%',
-        status: acc >= 60 ? '🎯 Đang đạt mục tiêu!' : '📈 Đang cải thiện...'
+        targetAccuracy: '60-70%'
     });
 });
 
@@ -1044,7 +1385,7 @@ app.get('/reset-learning', (req, res) => {
     lastProcessedPhien = { hu: null, md5: null };
     saveLearningData();
     savePredictionHistory();
-    res.json({ message: 'Reset thành công! Hệ thống đã sẵn sàng.' });
+    res.json({ message: 'Reset thành công!' });
 });
 
 // ==================== START SERVER ====================
@@ -1057,21 +1398,16 @@ setTimeout(() => autoProcessPredictions(), 3000);
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n╔═══════════════════════════════════════════════════════════════════════╗`);
-    console.log(`║     LẨU CUA 79 - TÀI XỈU AI v5.0 - TỐI ƯU 60-70%                  ║`);
+    console.log(`║     LẨU CUA 79 - TÀI XỈU AI v5.0 - FIXED COMPLETE                 ║`);
     console.log(`╚═══════════════════════════════════════════════════════════════════════╝\n`);
-    console.log(`🔥 CÁC CẢI TIẾN QUAN TRỌNG:\n`);
-    console.log(`   ✅ SỬA LỖI: Không còn đoán toàn Tài nữa!`);
-    console.log(`   🧠 Phân tích tâm lý nhà cái - Phát hiện bẫy`);
-    console.log(`   🎯 Phân tích điểm bẻ cầu - Dự đoán đảo chiều`);
-    console.log(`   📊 Phân tích xúc xắc chuyên sâu - Xu hướng từng mặt`);
-    console.log(`   🔄 Fallback thông minh - Đan xen khi không có pattern\n`);
-    console.log(`📊 TỈ LỆ THẮNG MỤC TIÊU: 60-70%\n`);
+    console.log(`✅ ĐÃ FIX LỖI: analyzeSmartBet is not defined`);
+    console.log(`✅ ĐÃ THÊM: Tất cả các hàm pattern còn thiếu\n`);
+    console.log(`🔥 CÁC PATTERN ĐANG HOẠT ĐỘNG:\n`);
+    console.log(`   • Cầu Bệt, Đảo 1-1, 2-2, 3-3, 4-4, 5-5`);
+    console.log(`   • Cầu 1-2-1, 1-2-3, 3-2-1, 2-1-2`);
+    console.log(`   • Cầu Nhảy Cóc, Nhịp Nghiêng, 3 Ván 1, Bẻ Cầu`);
+    console.log(`   • Cầu Rồng, Cầu Đôi, Cầu Gấp, Cầu Ziczac`);
+    console.log(`   • Smart Bet, Break Streak, Alternating Break`);
+    console.log(`   • Phân tích tâm lý nhà cái, điểm bẻ cầu, xúc xắc\n`);
     console.log(`📡 Server: http://0.0.0.0:${PORT}\n`);
-    console.log(`📋 ENDPOINTS:`);
-    console.log(`   GET /lc79-hu              - Dự đoán Tài Xỉu Hũ`);
-    console.log(`   GET /lc79-md5             - Dự đoán Tài Xỉu MD5`);
-    console.log(`   GET /lc79-hu/lichsu       - Lịch sử dự đoán`);
-    console.log(`   GET /lc79-hu/analysis     - Phân tích chi tiết`);
-    console.log(`   GET /lc79-hu/learning     - Thống kê học tập`);
-    console.log(`   GET /reset-learning       - Reset hệ thống\n`);
 });
