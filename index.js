@@ -28,6 +28,8 @@ class AnomalyDetector {
     this.breakPoints = [];
     this.timeWindowStats = {};
     this.reinforcementMemory = { tai: 0, xiu: 0, lastAdjustment: null };
+    this.confidenceHistory = { mc: [], simple: [], ensemble: [] };
+    this.seasonalPatterns = {};
   }
 
   loadAnomalyData() {
@@ -38,6 +40,7 @@ class AnomalyDetector {
         this.anomalyPatterns = parsed.anomalyPatterns || [];
         this.breakPoints = parsed.breakPoints || [];
         this.timeWindowStats = parsed.timeWindowStats || {};
+        this.seasonalPatterns = parsed.seasonalPatterns || {};
         console.log(`[Anomaly] Loaded ${this.anomalyPatterns.length} anomaly patterns, ${this.breakPoints.length} break points`);
       }
     } catch (error) {
@@ -51,6 +54,8 @@ class AnomalyDetector {
         anomalyPatterns: this.anomalyPatterns.slice(-200),
         breakPoints: this.breakPoints.slice(-200),
         timeWindowStats: this.timeWindowStats,
+        seasonalPatterns: this.seasonalPatterns,
+        reinforcementMemory: this.reinforcementMemory,
         lastSaved: new Date().toISOString()
       }, null, 2));
     } catch (error) {
@@ -65,44 +70,92 @@ class AnomalyDetector {
     const taiCount = recent.filter(r => r === 'Tài').length;
     const xiuCount = windowSize - taiCount;
     
-    const expectedRatio = 0.5;
-    const actualRatio = taiCount / windowSize;
-    const deviation = Math.abs(actualRatio - expectedRatio);
+    // Statistical z-score anomaly detection
+    const expectedMean = windowSize * 0.5;
+    const expectedStd = Math.sqrt(windowSize * 0.5 * 0.5);
+    const zScore = expectedStd > 0 ? Math.abs((taiCount - expectedMean) / expectedStd) : 0;
+    const isStatisticalAnomaly = zScore > 1.96;
     
-    const isAnomaly = deviation > 0.3;
-    const anomalyScore = Math.min(100, deviation * 200);
+    // Run test for randomness
+    const runs = this.calculateRuns(recent);
+    const expectedRuns = 1 + (2 * windowSize * 0.5 * 0.5) / 1;
+    const runsStd = Math.sqrt((2 * windowSize * 0.5 * 0.5 * (2 * windowSize * 0.5 * 0.5 - windowSize)) / (windowSize * windowSize * (windowSize - 1)));
+    const runsZScore = runsStd > 0 ? Math.abs((runs - expectedRuns) / runsStd) : 0;
+    const isRunsAnomaly = runsZScore > 1.96;
     
+    const deviation = Math.abs(taiCount / windowSize - 0.5);
+    const anomalyScore = Math.min(100, Math.max(0, (zScore / 3) * 100));
+    
+    // Pattern-based anomaly detection
     let breakDetected = false;
     let breakDirection = null;
+    let isAlternatingAnomaly = false;
     
     if (results.length >= 6) {
-      const first5 = results.slice(0, 5);
-      const sixth = results[5];
-      const allSame = first5.every(r => r === first5[0]);
-      if (allSame && sixth !== first5[0]) {
-        breakDetected = true;
-        breakDirection = sixth;
-        this.recordBreakPoint(first5[0], sixth, new Date());
+      breakDetected = this.detectBreakPatternAdvanced(results);
+      if (breakDetected && results.length >= 6) {
+        breakDirection = results[5] !== results[0] ? results[5] : (results[0] === 'Tài' ? 'Xỉu' : 'Tài');
       }
     }
     
-    let alternatingLength = 1;
-    for (let i = 1; i < Math.min(results.length, 15); i++) {
-      if (results[i] !== results[i-1]) alternatingLength++;
-      else break;
-    }
-    const isAlternatingAnomaly = alternatingLength >= 8;
+    const alternatingLength = this.getAlternatingLength(results);
+    isAlternatingAnomaly = alternatingLength >= 8;
     
     return {
-      isAnomaly: isAnomaly || breakDetected || isAlternatingAnomaly,
+      isAnomaly: isStatisticalAnomaly || isRunsAnomaly || breakDetected || isAlternatingAnomaly,
       score: anomalyScore,
       deviation: deviation.toFixed(3),
       taiRatio: (taiCount / windowSize * 100).toFixed(1),
       breakDetected,
       breakDirection,
       alternatingLength,
-      isAlternatingAnomaly
+      isAlternatingAnomaly,
+      zScore: zScore.toFixed(2),
+      runsZScore: runsZScore.toFixed(2)
     };
+  }
+
+  calculateRuns(results) {
+    let runs = 1;
+    for (let i = 1; i < results.length; i++) {
+      if (results[i] !== results[i-1]) runs++;
+    }
+    return runs;
+  }
+
+  getAlternatingLength(results) {
+    let length = 1;
+    for (let i = 1; i < results.length; i++) {
+      if (results[i] !== results[i-1]) length++;
+      else break;
+    }
+    return length;
+  }
+
+  detectBreakPatternAdvanced(results) {
+    if (results.length < 6) return false;
+    const last6 = results.slice(0, 6);
+    
+    // Check for various break patterns
+    const isUniformFirst = last6.slice(0, 3).every(r => r === last6[0]);
+    const isUniformLast = last6.slice(3, 6).every(r => r === last6[3]);
+    if (isUniformFirst && isUniformLast && last6[0] !== last6[3]) return true;
+    
+    // Check for 4-2 pattern
+    if (results.length >= 6) {
+      const first4 = results.slice(0, 4);
+      const last2 = results.slice(4, 6);
+      if (first4.every(r => r === first4[0]) && last2.every(r => r !== first4[0])) return true;
+    }
+    
+    // Check for 5-1 pattern
+    if (results.length >= 6) {
+      const first5 = results.slice(0, 5);
+      const sixth = results[5];
+      if (first5.every(r => r === first5[0]) && sixth !== first5[0]) return true;
+    }
+    
+    return false;
   }
 
   recordBreakPoint(fromType, toType, timestamp) {
@@ -111,55 +164,88 @@ class AnomalyDetector {
       to: toType,
       timestamp: timestamp.toISOString(),
       hour: timestamp.getHours(),
-      minute: timestamp.getMinutes()
+      minute: timestamp.getMinutes(),
+      dayOfWeek: timestamp.getDay()
     });
     
-    if (this.breakPoints.length > 200) {
-      this.breakPoints = this.breakPoints.slice(-200);
+    if (this.breakPoints.length > 500) {
+      this.breakPoints = this.breakPoints.slice(-500);
     }
     this.saveAnomalyData();
   }
 
   predictBreakProbability(currentStreak, currentStreakType, currentHour) {
-    if (this.breakPoints.length < 10) return 0.3;
+    if (this.breakPoints.length < 10) {
+      // Base probability based on streak length
+      return Math.min(0.85, 0.2 + (currentStreak / 10) * 0.5);
+    }
     
+    // Analyze historical break points
     const sameHourBreaks = this.breakPoints.filter(b => {
       const hour = new Date(b.timestamp).getHours();
       return hour === currentHour;
     });
     
     const sameTypeBreaks = this.breakPoints.filter(b => b.from === currentStreakType);
+    const sameStreakBreaks = this.breakPoints.filter((b, idx) => {
+      if (idx >= this.breakPoints.length - currentStreak) return false;
+      return true;
+    });
     
-    let probability = 0.3;
+    let probability = 0.25;
     
-    if (sameHourBreaks.length > 0) {
-      const hourBreakRate = sameHourBreaks.length / Math.max(1, this.breakPoints.length);
+    // Time-based probability
+    if (sameHourBreaks.length > 5) {
+      const hourBreakRate = sameHourBreaks.length / this.breakPoints.length;
       probability += hourBreakRate * 0.3;
     }
     
-    if (sameTypeBreaks.length > 0) {
-      const typeBreakRate = sameTypeBreaks.length / Math.max(1, this.breakPoints.filter(b => b.from === currentStreakType).length + 1);
-      probability += typeBreakRate * 0.2;
+    // Type-based probability
+    if (sameTypeBreaks.length > 5) {
+      const typeBreakRate = sameTypeBreaks.length / this.breakPoints.length;
+      probability += typeBreakRate * 0.25;
     }
     
-    probability += Math.min(0.4, currentStreak / 15);
+    // Streak-based probability
+    probability += Math.min(0.4, currentStreak / 12);
     
     return Math.min(0.85, probability);
   }
 
   learnFromResult(prediction, actual, confidence) {
     const isCorrect = prediction === actual;
+    const learningRate = 0.1;
     
     if (isCorrect) {
-      this.reinforcementMemory[prediction === 'Tài' ? 'tai' : 'xiu'] += 1;
+      if (prediction === 'Tài') {
+        this.reinforcementMemory.tai += learningRate;
+        this.reinforcementMemory.xiu -= learningRate * 0.5;
+      } else {
+        this.reinforcementMemory.xiu += learningRate;
+        this.reinforcementMemory.tai -= learningRate * 0.5;
+      }
       this.reinforcementMemory.lastAdjustment = new Date().toISOString();
     } else {
-      const wrongSide = prediction === 'Tài' ? 'tai' : 'xiu';
-      this.reinforcementMemory[wrongSide] = Math.max(0, this.reinforcementMemory[wrongSide] - 0.5);
+      if (prediction === 'Tài') {
+        this.reinforcementMemory.tai -= learningRate * 1.5;
+        this.reinforcementMemory.xiu += learningRate;
+      } else {
+        this.reinforcementMemory.xiu -= learningRate * 1.5;
+        this.reinforcementMemory.tai += learningRate;
+      }
     }
     
-    this.reinforcementMemory.tai = Math.min(10, Math.max(-5, this.reinforcementMemory.tai));
-    this.reinforcementMemory.xiu = Math.min(10, Math.max(-5, this.reinforcementMemory.xiu));
+    // Update confidence history for calibration
+    const confidenceBucket = Math.floor(confidence / 10) * 10;
+    if (!this.confidenceHistory.ensemble) this.confidenceHistory.ensemble = {};
+    if (!this.confidenceHistory.ensemble[confidenceBucket]) {
+      this.confidenceHistory.ensemble[confidenceBucket] = { correct: 0, total: 0 };
+    }
+    this.confidenceHistory.ensemble[confidenceBucket].total++;
+    if (isCorrect) this.confidenceHistory.ensemble[confidenceBucket].correct++;
+    
+    this.reinforcementMemory.tai = Math.max(-3, Math.min(3, this.reinforcementMemory.tai));
+    this.reinforcementMemory.xiu = Math.max(-3, Math.min(3, this.reinforcementMemory.xiu));
     
     this.saveAnomalyData();
   }
@@ -171,19 +257,22 @@ class AnomalyDetector {
     
     if (total < 0.5) return 0;
     
-    if (taiScore > xiuScore + 1) return 0.15;
-    if (xiuScore > taiScore + 1) return -0.15;
-    
-    return 0;
+    const diff = taiScore - xiuScore;
+    return Math.max(-0.15, Math.min(0.15, diff * 0.05));
   }
 
   updateTimeWindowStats(result, timestamp) {
     const hour = timestamp.getHours();
     const minute = Math.floor(timestamp.getMinutes() / 15) * 15;
+    const dayOfWeek = timestamp.getDay();
     const windowKey = `${hour}:${minute}`;
     
     if (!this.timeWindowStats[windowKey]) {
-      this.timeWindowStats[windowKey] = { tai: 0, xiu: 0, total: 0, lastUpdate: timestamp.toISOString() };
+      this.timeWindowStats[windowKey] = { 
+        tai: 0, xiu: 0, total: 0, 
+        lastUpdate: timestamp.toISOString(),
+        dayOfWeek: {}
+      };
     }
     
     if (result === 'Tài') {
@@ -194,22 +283,57 @@ class AnomalyDetector {
     this.timeWindowStats[windowKey].total++;
     this.timeWindowStats[windowKey].lastUpdate = timestamp.toISOString();
     
+    // Track day of week patterns
+    if (!this.timeWindowStats[windowKey].dayOfWeek[dayOfWeek]) {
+      this.timeWindowStats[windowKey].dayOfWeek[dayOfWeek] = { tai: 0, xiu: 0, total: 0 };
+    }
+    if (result === 'Tài') {
+      this.timeWindowStats[windowKey].dayOfWeek[dayOfWeek].tai++;
+    } else {
+      this.timeWindowStats[windowKey].dayOfWeek[dayOfWeek].xiu++;
+    }
+    this.timeWindowStats[windowKey].dayOfWeek[dayOfWeek].total++;
+    
     this.saveAnomalyData();
   }
 
   predictByTimeWindow(currentTimestamp) {
     const hour = currentTimestamp.getHours();
     const minute = Math.floor(currentTimestamp.getMinutes() / 15) * 15;
+    const dayOfWeek = currentTimestamp.getDay();
     const windowKey = `${hour}:${minute}`;
     
     const stats = this.timeWindowStats[windowKey];
     if (!stats || stats.total < 5) return null;
     
-    const taiRatio = stats.tai / stats.total;
-    if (taiRatio > 0.6) return { prediction: 'Tài', confidence: 55 + Math.round(taiRatio * 20) };
-    if (taiRatio < 0.4) return { prediction: 'Xỉu', confidence: 55 + Math.round((1 - taiRatio) * 20) };
+    // Check day-specific pattern first
+    const dayStats = stats.dayOfWeek[dayOfWeek];
+    let taiRatio = stats.tai / stats.total;
+    
+    if (dayStats && dayStats.total >= 3) {
+      // Blend day-specific with general pattern
+      const dayTaiRatio = dayStats.tai / dayStats.total;
+      taiRatio = (dayTaiRatio * 0.6 + taiRatio * 0.4);
+    }
+    
+    if (taiRatio > 0.6) return { prediction: 'Tài', confidence: 50 + Math.round(taiRatio * 25) };
+    if (taiRatio < 0.4) return { prediction: 'Xỉu', confidence: 50 + Math.round((1 - taiRatio) * 25) };
     
     return null;
+  }
+
+  calibrateConfidence(rawConfidence, method) {
+    if (!this.confidenceHistory[method]) return rawConfidence;
+    
+    const bucket = Math.floor(rawConfidence / 10) * 10;
+    const stats = this.confidenceHistory[method][bucket];
+    
+    if (!stats || stats.total < 5) return rawConfidence;
+    
+    const actualAccuracy = stats.correct / stats.total;
+    const calibrationFactor = actualAccuracy / (bucket / 100);
+    
+    return Math.min(85, Math.max(50, rawConfidence * calibrationFactor));
   }
 }
 
@@ -219,7 +343,7 @@ class BalancedMonteCarlo {
     this.historicalData = historicalData;
     this.windowSize = windowSize;
     this.numSimulations = 8000;
-    this.recentWeights = [];
+    this.minPatterns = 10;
   }
 
   extractBalancedFeatures(data) {
@@ -232,30 +356,50 @@ class BalancedMonteCarlo {
     const xiuCount = results.length - taiCount;
     const balanceRatio = Math.min(taiCount, xiuCount) / Math.max(taiCount, xiuCount);
     
+    // Entropy calculation for randomness measure
+    const pTai = taiCount / results.length;
+    const pXiu = xiuCount / results.length;
+    const entropy = -(pTai * Math.log2(Math.max(pTai, 0.001)) + pXiu * Math.log2(Math.max(pXiu, 0.001)));
+    
     const last5 = results.slice(0, 5);
     const last5Tai = last5.filter(r => r === 'Tài').length;
-    const last5Trend = last5Tai >= 4 ? 'strong_tai' : (last5Tai <= 1 ? 'strong_xiu' : 'balanced');
     
     const ma5 = sums.slice(0, 5).reduce((a, b) => a + b, 0) / 5;
     const ma10 = sums.slice(0, 10).reduce((a, b) => a + b, 0) / 10;
-    const sumTrend = ma5 > ma10 + 1 ? 'up' : (ma5 < ma10 - 1 ? 'down' : 'stable');
+    const ma20 = sums.length >= 20 ? sums.slice(0, 20).reduce((a, b) => a + b, 0) / 20 : ma10;
+    
+    const sumTrend = ma5 > ma10 ? 'up' : (ma5 < ma10 ? 'down' : 'stable');
+    const momentum = ma10 > 0 ? (ma5 - ma20) / ma10 : 0;
     
     let currentStreak = 1;
     for (let i = 1; i < results.length; i++) {
       if (results[i] === results[0]) currentStreak++;
       else break;
     }
+    currentStreak = Math.min(currentStreak, 15);
     
     return {
       last5Results: last5,
       last5TaiCount: last5Tai,
-      last5Trend,
+      last5Trend: this.categorizeTrend(last5),
       balanceRatio,
       currentStreak,
       sumTrend,
-      ma5, ma10,
-      recentVolatility: this.calculateVolatility(sums.slice(0, 10))
+      momentum,
+      ma5, ma10, ma20,
+      recentVolatility: this.calculateVolatility(sums.slice(0, 10)),
+      entropy,
+      timestamp: data[0]?.timestamp || new Date().toISOString()
     };
+  }
+
+  categorizeTrend(last5) {
+    const taiCount = last5.filter(r => r === 'Tài').length;
+    if (taiCount >= 4) return 'strong_tai';
+    if (taiCount <= 1) return 'strong_xiu';
+    if (taiCount === 2) return 'slight_xiu';
+    if (taiCount === 3) return 'slight_tai';
+    return 'balanced';
   }
 
   calculateVolatility(sums) {
@@ -263,6 +407,16 @@ class BalancedMonteCarlo {
     const mean = sums.reduce((a, b) => a + b, 0) / sums.length;
     const variance = sums.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / sums.length;
     return Math.sqrt(variance);
+  }
+
+  getStreakLength(results) {
+    if (results.length === 0) return 0;
+    let streak = 1;
+    for (let i = 1; i < results.length; i++) {
+      if (results[i] === results[0]) streak++;
+      else break;
+    }
+    return Math.min(streak, 15);
   }
 
   findBalancedPatterns(currentFeatures, maxMatches = 80) {
@@ -276,31 +430,49 @@ class BalancedMonteCarlo {
       
       let similarity = 0;
       
+      // Trend similarity (high weight)
       if (windowFeatures.last5Trend === currentFeatures.last5Trend) {
-        similarity += 25;
+        similarity += 30;
+      } else if (
+        (windowFeatures.last5Trend.includes('tai') && currentFeatures.last5Trend.includes('tai')) ||
+        (windowFeatures.last5Trend.includes('xiu') && currentFeatures.last5Trend.includes('xiu'))
+      ) {
+        similarity += 15;
       }
       
+      // Balance ratio similarity
       const balanceDiff = Math.abs(windowFeatures.balanceRatio - currentFeatures.balanceRatio);
-      similarity += Math.max(0, 20 - balanceDiff * 30);
+      similarity += Math.max(0, 25 - balanceDiff * 40);
       
-      if (windowFeatures.balanceRatio > 0.4) {
-        similarity += 10;
-      }
+      // Entropy similarity
+      const entropyDiff = Math.abs(windowFeatures.entropy - currentFeatures.entropy);
+      similarity += Math.max(0, 15 - entropyDiff * 20);
       
+      // Streak similarity
       const streakDiff = Math.abs(windowFeatures.currentStreak - currentFeatures.currentStreak);
       similarity += Math.max(0, 15 - streakDiff * 2);
       
+      // Sum trend similarity
       if (windowFeatures.sumTrend === currentFeatures.sumTrend) {
         similarity += 15;
       }
       
-      if (similarity > 15) {
+      // Momentum similarity
+      const momentumDiff = Math.abs((windowFeatures.momentum || 0) - (currentFeatures.momentum || 0));
+      similarity += Math.max(0, 10 - momentumDiff * 30);
+      
+      // Recency bonus
+      const recencyBonus = Math.max(0, 10 - (i / this.historicalData.length) * 10);
+      similarity += recencyBonus;
+      
+      if (similarity > 20) {
         matches.push({
           similarity,
           index: i,
           nextResult: this.historicalData[i + this.windowSize]?.Ket_qua,
           nextSum: this.historicalData[i + this.windowSize]?.Tong,
-          windowFeatures
+          windowFeatures,
+          recency: i / this.historicalData.length
         });
       }
     }
@@ -309,27 +481,54 @@ class BalancedMonteCarlo {
     return matches.slice(0, maxMatches);
   }
 
+  weightedRandomSelect(patterns) {
+    if (patterns.length === 0) return patterns[0];
+    const totalWeight = patterns.reduce((sum, p) => sum + p.similarity, 0);
+    let random = Math.random() * totalWeight;
+    for (const pattern of patterns) {
+      random -= pattern.similarity;
+      if (random <= 0) return pattern;
+    }
+    return patterns[patterns.length - 1];
+  }
+
+  calculatePatternQuality(patterns) {
+    if (patterns.length === 0) return 0;
+    const avgSimilarity = patterns.reduce((sum, p) => sum + p.similarity, 0) / patterns.length;
+    const diversity = new Set(patterns.map(p => p.nextResult)).size;
+    return (avgSimilarity / 100) * (diversity / 2) * Math.min(1, patterns.length / 50);
+  }
+
   runBalancedSimulation(currentData, anomalyDetector, currentHour) {
     const currentFeatures = this.extractBalancedFeatures(currentData);
     
     if (!currentFeatures || this.historicalData.length < 50) {
-      const last20Results = currentData.slice(0, 20).map(d => d.Ket_qua);
-      const taiCount = last20Results.filter(r => r === 'Tài').length;
-      const taiProb = taiCount / 20;
+      // Weighted moving average fallback
+      const last30Results = currentData.slice(0, 30).map(d => d.Ket_qua);
+      const weightedResults = last30Results.map((r, i) => ({ 
+        result: r, 
+        weight: Math.exp(-i / 10)
+      }));
+      const weightedTaiCount = weightedResults.reduce((sum, item) => 
+        sum + (item.result === 'Tài' ? item.weight : 0), 0);
+      const weightedTotal = weightedResults.reduce((sum, item) => sum + item.weight, 0);
+      const taiProb = weightedTotal > 0 ? weightedTaiCount / weightedTotal : 0.5;
+      
       return {
         taiProbability: taiProb.toFixed(4),
         xiuProbability: (1 - taiProb).toFixed(4),
-        confidence: 50 + Math.abs(taiProb - 0.5) * 40,
+        confidence: 45 + Math.abs(taiProb - 0.5) * 50,
         prediction: taiProb > 0.5 ? 'Tài' : 'Xỉu',
         similarPatternsCount: 0,
         breakProbability: 0.3,
-        balanceRatio: 0.5
+        balanceRatio: 0.5,
+        method: 'weighted_fallback'
       };
     }
     
     const similarPatterns = this.findBalancedPatterns(currentFeatures, 100);
     
-    if (similarPatterns.length < 5) {
+    if (similarPatterns.length < this.minPatterns) {
       const last20Results = currentData.slice(0, 20).map(d => d.Ket_qua);
       const taiCount = last20Results.filter(r => r === 'Tài').length;
       const taiProb = taiCount / 20;
@@ -340,44 +539,72 @@ class BalancedMonteCarlo {
         prediction: taiProb > 0.5 ? 'Tài' : 'Xỉu',
         similarPatternsCount: similarPatterns.length,
         breakProbability: 0.3,
-        balanceRatio: currentFeatures.balanceRatio.toFixed(2)
+        balanceRatio: currentFeatures.balanceRatio.toFixed(2),
+        method: 'simple_statistical'
       };
     }
+    
+    // Calculate pattern quality for adaptive simulation
+    const patternQuality = this.calculatePatternQuality(similarPatterns);
+    const adaptiveSimCount = Math.floor(this.numSimulations * (0.5 + patternQuality));
     
     let taiWins = 0;
     let xiuWins = 0;
     let totalWeight = 0;
+    const usedPatterns = new Set();
     
-    for (let sim = 0; sim < this.numSimulations; sim++) {
+    for (let sim = 0; sim < adaptiveSimCount; sim++) {
       let selectedPattern;
-      if (sim < similarPatterns.length) {
+      
+      if (sim < similarPatterns.length && !usedPatterns.has(sim)) {
         selectedPattern = similarPatterns[sim];
+        usedPatterns.add(sim);
       } else {
-        const randomIndex = Math.floor(Math.random() * similarPatterns.length);
-        selectedPattern = similarPatterns[randomIndex];
+        selectedPattern = this.weightedRandomSelect(similarPatterns);
       }
       
-      let weight = selectedPattern.similarity / 100;
+      // Weighted by similarity squared for emphasis
+      let weight = Math.pow(selectedPattern.similarity / 100, 2);
       
-      if (selectedPattern.windowFeatures && selectedPattern.windowFeatures.balanceRatio > 0.45) {
-        weight *= 1.2;
+      // Recency weight
+      if (selectedPattern.recency !== undefined) {
+        weight *= (1 - selectedPattern.recency * 0.5);
       }
       
       totalWeight += weight;
       
       if (selectedPattern.nextResult === 'Tài') {
         taiWins += weight;
-      } else {
+      } else if (selectedPattern.nextResult === 'Xỉu') {
         xiuWins += weight;
       }
     }
     
+    if (totalWeight === 0) {
+      return {
+        taiProbability: 0.5,
+        xiuProbability: 0.5,
+        confidence: 50,
+        prediction: Math.random() > 0.5 ? 'Tài' : 'Xỉu',
+        similarPatternsCount: similarPatterns.length,
+        breakProbability: 0.3,
+        balanceRatio: currentFeatures.balanceRatio.toFixed(2),
+        method: 'random_fallback'
+      };
+    }
+    
     let taiProbability = taiWins / totalWeight;
     
-    const biasCorrection = anomalyDetector.getBiasCorrection();
-    taiProbability += biasCorrection;
-    taiProbability = Math.max(0.3, Math.min(0.7, taiProbability));
+    // Calculate confidence interval
+    const standardError = Math.sqrt(taiProbability * (1 - taiProbability) / adaptiveSimCount);
+    const confidenceInterval = 1.96 * standardError;
     
+    // Apply bias correction conservatively
+    const biasCorrection = anomalyDetector.getBiasCorrection();
+    taiProbability += biasCorrection * 0.5;
+    taiProbability = Math.max(0.35, Math.min(0.65, taiProbability));
+    
+    // Apply break probability if strong signal
     const currentStreakType = currentData[0]?.Ket_qua;
     const breakProb = anomalyDetector.predictBreakProbability(
       currentFeatures.currentStreak, 
@@ -385,12 +612,14 @@ class BalancedMonteCarlo {
       currentHour
     );
     
-    if (breakProb > 0.6 && currentFeatures.currentStreak >= 3) {
+    if (breakProb > 0.65 && currentFeatures.currentStreak >= 3) {
       taiProbability = 1 - taiProbability;
     }
     
-    const confidence = 50 + Math.abs(taiProbability - 0.5) * 80;
-    const finalConfidence = Math.min(85, Math.max(55, Math.round(confidence)));
+    // Calibrate confidence
+    const rawConfidence = 45 + Math.abs(taiProbability - 0.5) * 90;
+    const calibratedConfidence = anomalyDetector.calibrateConfidence(rawConfidence, 'mc');
+    const finalConfidence = Math.min(80, Math.max(52, Math.round(calibratedConfidence * (1 - confidenceInterval))));
     
     return {
       taiProbability: taiProbability.toFixed(4),
@@ -399,7 +628,10 @@ class BalancedMonteCarlo {
       prediction: taiProbability > 0.5 ? 'Tài' : 'Xỉu',
       similarPatternsCount: similarPatterns.length,
       breakProbability: breakProb.toFixed(2),
-      balanceRatio: currentFeatures.balanceRatio.toFixed(2)
+      balanceRatio: currentFeatures.balanceRatio.toFixed(2),
+      confidenceInterval: confidenceInterval.toFixed(3),
+      patternQuality: patternQuality.toFixed(2),
+      method: 'balanced_monte_carlo'
     };
   }
 }
@@ -410,15 +642,16 @@ class ReinforcementLearner {
     this.qTable = {};
     this.learningRate = 0.1;
     this.discountFactor = 0.95;
-    this.epsilon = 0.2;
+    this.epsilon = 0.15;
+    this.visitCounts = {};
   }
 
   getStateKey(results, patterns) {
     if (!results || results.length === 0) return 'default';
-    const last3 = results.slice(0, 3).join('');
+    const last4 = results.slice(0, 4).join('');
     const streak = this.getStreakLength(results);
-    const recentTrend = results.slice(0, 5).filter(r => r === 'Tài').length;
-    return `${last3}_${streak}_${recentTrend}`;
+    const recentTrend = results.slice(0, 6).filter(r => r === 'Tài').length;
+    return `${last4}_${streak}_${recentTrend}`;
   }
 
   getStreakLength(results) {
@@ -428,42 +661,56 @@ class ReinforcementLearner {
       if (results[i] === results[0]) streak++;
       else break;
     }
-    return Math.min(streak, 10);
+    return Math.min(streak, 12);
   }
 
   getAction(state, possibleActions = ['Tài', 'Xỉu']) {
     if (!this.qTable[state]) {
       this.qTable[state] = { Tài: 0.5, Xỉu: 0.5 };
+      this.visitCounts[state] = 0;
     }
     
-    if (Math.random() < this.epsilon) {
+    // Adaptive epsilon based on visit count
+    const adaptiveEpsilon = Math.max(0.05, this.epsilon / (1 + this.visitCounts[state] * 0.01));
+    
+    if (Math.random() < adaptiveEpsilon) {
       return possibleActions[Math.floor(Math.random() * possibleActions.length)];
     }
     
+    this.visitCounts[state] = (this.visitCounts[state] || 0) + 1;
     return this.qTable[state].Tài > this.qTable[state].Xỉu ? 'Tài' : 'Xỉu';
   }
 
   updateQValue(state, action, reward, nextState) {
     if (!this.qTable[state]) {
       this.qTable[state] = { Tài: 0.5, Xỉu: 0.5 };
+      this.visitCounts[state] = 0;
     }
     if (!this.qTable[nextState]) {
       this.qTable[nextState] = { Tài: 0.5, Xỉu: 0.5 };
+      this.visitCounts[nextState] = 0;
     }
     
     const currentQ = this.qTable[state][action];
     const maxNextQ = Math.max(this.qTable[nextState].Tài, this.qTable[nextState].Xỉu);
-    const newQ = currentQ + this.learningRate * (reward + this.discountFactor * maxNextQ - currentQ);
     
-    this.qTable[state][action] = newQ;
-    this.qTable[state][action] = Math.max(0, Math.min(1, this.qTable[state][action]));
+    // Adaptive learning rate
+    const adaptiveLR = this.learningRate / (1 + (this.visitCounts[state] || 0) * 0.001);
+    
+    const newQ = currentQ + adaptiveLR * (reward + this.discountFactor * maxNextQ - currentQ);
+    
+    this.qTable[state][action] = Math.max(0, Math.min(1, newQ));
   }
 
   getQLearningPrediction(state) {
     if (!this.qTable[state]) return null;
-    if (this.qTable[state].Tài > this.qTable[state].Xỉu + 0.1) return 'Tài';
-    if (this.qTable[state].Xỉu > this.qTable[state].Tài + 0.1) return 'Xỉu';
-    return null;
+    
+    const taiValue = this.qTable[state].Tài || 0.5;
+    const xiuValue = this.qTable[state].Xỉu || 0.5;
+    const diff = taiValue - xiuValue;
+    
+    if (Math.abs(diff) < 0.15) return null;
+    return diff > 0 ? 'Tài' : 'Xỉu';
   }
 }
 
@@ -477,7 +724,13 @@ let learningData = {
     patternWeights: {},
     lastUpdate: null,
     streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 },
-    recentAccuracy: []
+    recentAccuracy: [],
+    methodPerformance: {
+      simple: { correct: 0, total: 0 },
+      monteCarlo: { correct: 0, total: 0 },
+      anomaly: { correct: 0, total: 0 },
+      ensemble: { correct: 0, total: 0 }
+    }
   },
   md5: {
     predictions: [],
@@ -487,7 +740,13 @@ let learningData = {
     patternWeights: {},
     lastUpdate: null,
     streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 },
-    recentAccuracy: []
+    recentAccuracy: [],
+    methodPerformance: {
+      simple: { correct: 0, total: 0 },
+      monteCarlo: { correct: 0, total: 0 },
+      anomaly: { correct: 0, total: 0 },
+      ensemble: { correct: 0, total: 0 }
+    }
   }
 };
 
@@ -508,8 +767,25 @@ let rlLearner = { hu: new ReinforcementLearner(), md5: new ReinforcementLearner(
 function updateMonteCarloSimulators(type, data) {
   if (data && data.length >= 40) {
     monteCarloSimulators[type] = new BalancedMonteCarlo(data, 40);
-    console.log(`[MC] Balanced simulator initialized for ${type}`);
+    console.log(`[MC] Balanced simulator initialized for ${type} with ${data.length} records`);
   }
+}
+
+function preprocessData(rawData) {
+  if (!rawData || !Array.isArray(rawData) || rawData.length === 0) return null;
+  
+  // Remove outliers in sums
+  const processed = rawData.map(d => ({ ...d }));
+  
+  // Smooth extreme outliers
+  for (let i = 1; i < processed.length - 1; i++) {
+    if (Math.abs(processed[i].Tong - processed[i-1].Tong) > 15 && 
+        Math.abs(processed[i].Tong - processed[i+1].Tong) > 15) {
+      processed[i].Tong = Math.round((processed[i-1].Tong + processed[i+1].Tong) / 2);
+    }
+  }
+  
+  return processed;
 }
 
 function transformApiData(apiData) {
@@ -520,14 +796,16 @@ function transformApiData(apiData) {
     Xuc_xac_1: item.dices[0],
     Xuc_xac_2: item.dices[1],
     Xuc_xac_3: item.dices[2],
-    Tong: item.point
+    Tong: item.point,
+    timestamp: new Date().toISOString()
   }));
 }
 
 async function fetchDataHu() {
   try {
-    const response = await axios.get(API_URL_HU);
-    return transformApiData(response.data);
+    const response = await axios.get(API_URL_HU, { timeout: 10000 });
+    const rawData = transformApiData(response.data);
+    return preprocessData(rawData);
   } catch (error) {
     console.error('Error fetching HU data:', error.message);
     return null;
@@ -536,8 +814,9 @@ async function fetchDataHu() {
 
 async function fetchDataMd5() {
   try {
-    const response = await axios.get(API_URL_MD5);
-    return transformApiData(response.data);
+    const response = await axios.get(API_URL_MD5, { timeout: 10000 });
+    const rawData = transformApiData(response.data);
+    return preprocessData(rawData);
   } catch (error) {
     console.error('Error fetching MD5 data:', error.message);
     return null;
@@ -565,12 +844,13 @@ function savePredictionToHistory(type, phien, prediction, confidence) {
   return record;
 }
 
-function recordPrediction(type, phien, prediction, confidence, factors) {
+function recordPrediction(type, phien, prediction, confidence, factors, methods) {
   const record = {
     phien: phien.toString(),
     prediction,
     confidence,
     factors,
+    methods,
     timestamp: new Date().toISOString(),
     verified: false,
     actual: null,
@@ -597,29 +877,48 @@ async function verifyPredictions(type, currentData) {
       
       if (pred.isCorrect) {
         learningData[type].correctPredictions++;
-        if (learningData[type].streakAnalysis.currentStreak >= 0) learningData[type].streakAnalysis.currentStreak++;
-        else learningData[type].streakAnalysis.currentStreak = 1;
+        if (learningData[type].streakAnalysis.currentStreak >= 0) {
+          learningData[type].streakAnalysis.currentStreak++;
+        } else {
+          learningData[type].streakAnalysis.currentStreak = 1;
+        }
         if (learningData[type].streakAnalysis.currentStreak > learningData[type].streakAnalysis.bestStreak) {
           learningData[type].streakAnalysis.bestStreak = learningData[type].streakAnalysis.currentStreak;
         }
       } else {
-        if (learningData[type].streakAnalysis.currentStreak <= 0) learningData[type].streakAnalysis.currentStreak--;
-        else learningData[type].streakAnalysis.currentStreak = -1;
+        if (learningData[type].streakAnalysis.currentStreak <= 0) {
+          learningData[type].streakAnalysis.currentStreak--;
+        } else {
+          learningData[type].streakAnalysis.currentStreak = -1;
+        }
         if (learningData[type].streakAnalysis.currentStreak < learningData[type].streakAnalysis.worstStreak) {
           learningData[type].streakAnalysis.worstStreak = learningData[type].streakAnalysis.currentStreak;
         }
       }
       
-      learningData[type].recentAccuracy.push(pred.isCorrect ? 1 : 0);
-      if (learningData[type].recentAccuracy.length > 50) learningData[type].recentAccuracy.shift();
+      // Update method performance
+      if (pred.methods) {
+        for (const [method, used] of Object.entries(pred.methods)) {
+          if (used && learningData[type].methodPerformance[method]) {
+            learningData[type].methodPerformance[method].total++;
+            if (pred.isCorrect) learningData[type].methodPerformance[method].correct++;
+          }
+        }
+      }
       
+      learningData[type].recentAccuracy.push(pred.isCorrect ? 1 : 0);
+      if (learningData[type].recentAccuracy.length > 100) {
+        learningData[type].recentAccuracy.shift();
+      }
+      
+      // Update RL
       const stateKey = rlLearner[type].getStateKey(
         currentData.slice(0, 10).map(d => d.Ket_qua), []
       );
-      const reward = pred.isCorrect ? 1 : -1;
-      const nextState = stateKey;
-      rlLearner[type].updateQValue(stateKey, pred.prediction, reward, nextState);
+      const reward = pred.isCorrect ? 1 : -0.5;
+      rlLearner[type].updateQValue(stateKey, pred.prediction, reward, stateKey);
       
+      // Update anomaly detector
       anomalyDetector.learnFromResult(pred.prediction, pred.actual, pred.confidence);
       anomalyDetector.updateTimeWindowStats(pred.actual, new Date(pred.timestamp));
       
@@ -646,6 +945,25 @@ function loadLearningData() {
     if (fs.existsSync(LEARNING_FILE)) {
       const data = fs.readFileSync(LEARNING_FILE, 'utf8');
       const parsed = JSON.parse(data);
+      
+      // Merge method performance data
+      if (parsed.hu) {
+        parsed.hu.methodPerformance = parsed.hu.methodPerformance || {
+          simple: { correct: 0, total: 0 },
+          monteCarlo: { correct: 0, total: 0 },
+          anomaly: { correct: 0, total: 0 },
+          ensemble: { correct: 0, total: 0 }
+        };
+      }
+      if (parsed.md5) {
+        parsed.md5.methodPerformance = parsed.md5.methodPerformance || {
+          simple: { correct: 0, total: 0 },
+          monteCarlo: { correct: 0, total: 0 },
+          anomaly: { correct: 0, total: 0 },
+          ensemble: { correct: 0, total: 0 }
+        };
+      }
+      
       learningData = { ...learningData, ...parsed };
       console.log('Learning data loaded');
     }
@@ -681,65 +999,6 @@ function savePredictionHistory() {
 }
 
 // ==================== PATTERN ANALYSIS FUNCTIONS ====================
-function detectBreakPattern(results, type) {
-  if (results.length < 6) return null;
-  
-  const pattern = results.slice(0, 8);
-  let breakDetected = false;
-  let prediction = null;
-  let confidence = 55;
-  
-  if (pattern[0] === pattern[1] && pattern[2] === pattern[3] && pattern[0] !== pattern[2]) {
-    if (pattern[4] === pattern[5] && pattern[4] !== pattern[2]) {
-      breakDetected = true;
-      prediction = pattern[4];
-      confidence = 70;
-    }
-  }
-  
-  if (pattern[0] === pattern[1] && pattern[1] === pattern[2] && pattern[3] !== pattern[0]) {
-    breakDetected = true;
-    prediction = pattern[3] === 'Tài' ? 'Xỉu' : 'Tài';
-    confidence = 75;
-  }
-  
-  let alternatingCount = 1;
-  for (let i = 1; i < Math.min(results.length, 12); i++) {
-    if (results[i] !== results[i-1]) alternatingCount++;
-    else break;
-  }
-  if (alternatingCount >= 6 && alternatingCount <= 9) {
-    breakDetected = true;
-    prediction = results[0];
-    confidence = 68;
-  }
-  if (alternatingCount >= 10) {
-    breakDetected = true;
-    prediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
-    confidence = 72;
-  }
-  
-  return breakDetected ? { prediction, confidence, name: 'Break Pattern' } : null;
-}
-
-function detectTrendReversal(results, type) {
-  if (results.length < 8) return null;
-  
-  const last8 = results.slice(0, 8);
-  const first4 = last8.slice(0, 4);
-  const last4 = last8.slice(4, 8);
-  
-  const first4Tai = first4.filter(r => r === 'Tài').length;
-  const last4Tai = last4.filter(r => r === 'Tài').length;
-  
-  if ((first4Tai >= 3 && last4Tai <= 1) || (first4Tai <= 1 && last4Tai >= 3)) {
-    const prediction = last4Tai >= 3 ? 'Tài' : 'Xỉu';
-    return { prediction, confidence: 68, name: 'Trend Reversal' };
-  }
-  
-  return null;
-}
-
 function analyzeSimplePattern(results) {
   if (results.length < 3) return { prediction: results[0] || 'Tài', confidence: 50 };
   
@@ -748,38 +1007,103 @@ function analyzeSimplePattern(results) {
     if (results[i] === results[0]) streak++;
     else break;
   }
-  if (streak >= 3) {
-    const shouldBreak = streak >= 5;
+  
+  if (streak >= 4) {
+    // Long streak - high probability of continuing
+    const confidence = 55 + Math.min(20, streak * 3);
     return { 
-      prediction: shouldBreak ? (results[0] === 'Tài' ? 'Xỉu' : 'Tài') : results[0],
-      confidence: 55 + Math.min(15, streak * 2),
-      name: `Streak ${streak}`
+      prediction: results[0], 
+      confidence, 
+      name: `Streak Continue ${streak}` 
+    };
+  } else if (streak >= 3) {
+    // Medium streak - consider break
+    const probability = streak >= 5 ? 0.7 : 0.5;
+    const prediction = Math.random() < probability ? results[0] : (results[0] === 'Tài' ? 'Xỉu' : 'Tài');
+    return { 
+      prediction, 
+      confidence: 55 + streak * 2, 
+      name: `Streak ${streak}` 
     };
   }
   
+  // Check alternating pattern
   let alternating = true;
-  for (let i = 1; i < Math.min(results.length, 6); i++) {
+  for (let i = 1; i < Math.min(results.length, 7); i++) {
     if (results[i] === results[i-1]) {
       alternating = false;
       break;
     }
   }
-  if (alternating && results.length >= 4) {
+  
+  if (alternating && results.length >= 5) {
     return {
       prediction: results[0] === 'Tài' ? 'Xỉu' : 'Tài',
-      confidence: 60,
-      name: 'Alternating'
+      confidence: 62,
+      name: 'Alternating Pattern'
     };
   }
   
+  // Recent trend analysis
+  const last6 = results.slice(0, 6);
+  const taiCount = last6.filter(r => r === 'Tài').length;
+  
+  if (taiCount >= 5) return { prediction: 'Tài', confidence: 58, name: 'Strong Tai Trend' };
+  if (taiCount <= 1) return { prediction: 'Xỉu', confidence: 58, name: 'Strong Xiu Trend' };
+  
   return {
     prediction: results[0],
-    confidence: 50,
+    confidence: 52,
     name: 'Follow Previous'
   };
 }
 
 // ==================== MAIN PREDICTION FUNCTION ====================
+function calculateEnsembleWeights(type) {
+  const stats = learningData[type];
+  
+  // Default weights
+  const defaultWeights = {
+    simple: 0.4,
+    monteCarlo: 0.5,
+    anomaly: 0.3,
+    rl: 0.2,
+    timeWindow: 0.25
+  };
+  
+  if (stats.totalPredictions < 20) return defaultWeights;
+  
+  // Calculate method-specific weights based on performance
+  const weights = {};
+  
+  for (const [method, perf] of Object.entries(stats.methodPerformance)) {
+    if (perf.total >= 5) {
+      const accuracy = perf.correct / perf.total;
+      weights[method] = Math.max(0.1, Math.min(0.8, accuracy + 0.1));
+    } else {
+      weights[method] = defaultWeights[method] || 0.3;
+    }
+  }
+  
+  // Adjust based on recent accuracy
+  const recentAcc = stats.recentAccuracy.length > 0 
+    ? stats.recentAccuracy.slice(-20).reduce((a, b) => a + b, 0) / Math.min(20, stats.recentAccuracy.length)
+    : 0.5;
+  
+  // Boost weights if performing well recently
+  if (recentAcc > 0.6) {
+    for (const method in weights) {
+      weights[method] *= 1.2;
+    }
+  } else if (recentAcc < 0.4) {
+    for (const method in weights) {
+      weights[method] *= 0.8;
+    }
+  }
+  
+  return weights;
+}
+
 function calculateSuperPrediction(data, type) {
   const results = data.slice(0, 30).map(d => d.Ket_qua);
   const currentTime = new Date();
@@ -787,91 +1111,148 @@ function calculateSuperPrediction(data, type) {
   
   let predictions = [];
   let factors = [];
+  let methodsUsed = {};
   
+  // Get ensemble weights
+  const weights = calculateEnsembleWeights(type);
+  
+  // 1. Simple Pattern Analysis
   const simplePattern = analyzeSimplePattern(results);
-  predictions.push({ prediction: simplePattern.prediction, confidence: simplePattern.confidence, priority: 5, name: simplePattern.name });
-  factors.push(`Pattern: ${simplePattern.name}`);
+  predictions.push({ 
+    prediction: simplePattern.prediction, 
+    confidence: simplePattern.confidence, 
+    weight: weights.simple || 0.4, 
+    name: simplePattern.name,
+    method: 'simple'
+  });
+  methodsUsed.simple = true;
   
-  const breakPattern = detectBreakPattern(results, type);
-  if (breakPattern) {
-    predictions.push({ prediction: breakPattern.prediction, confidence: breakPattern.confidence, priority: 8, name: breakPattern.name });
-    factors.push(`Break: ${breakPattern.name}`);
-  }
-  
-  const trendReversal = detectTrendReversal(results, type);
-  if (trendReversal) {
-    predictions.push({ prediction: trendReversal.prediction, confidence: trendReversal.confidence, priority: 7, name: trendReversal.name });
-    factors.push(`Reversal: ${trendReversal.name}`);
-  }
-  
-  if (monteCarloSimulators[type]) {
-    const mcResult = monteCarloSimulators[type].runBalancedSimulation(data, anomalyDetector, currentHour);
-    if (mcResult && mcResult.prediction) {
-      predictions.push({ 
-        prediction: mcResult.prediction, 
-        confidence: mcResult.confidence, 
-        priority: 9, 
-        name: `Monte Carlo (${mcResult.taiProbability})` 
-      });
-      factors.push(`MC: ${(parseFloat(mcResult.taiProbability) * 100).toFixed(0)}% Tài, Break: ${(parseFloat(mcResult.breakProbability) * 100).toFixed(0)}%`);
-    }
-  }
-  
-  const timePrediction = anomalyDetector.predictByTimeWindow(currentTime);
-  if (timePrediction) {
-    predictions.push({ prediction: timePrediction.prediction, confidence: timePrediction.confidence, priority: 6, name: 'Time Window' });
-    factors.push(`Time: ${timePrediction.prediction} ${timePrediction.confidence}%`);
-  }
-  
+  // 2. Anomaly Detection
   const anomaly = anomalyDetector.detectAnomaly(results, 10);
   if (anomaly.isAnomaly) {
-    factors.push(`⚠️ Anomaly detected (${anomaly.taiRatio}% Tài, break:${anomaly.breakDetected})`);
+    factors.push(`⚠️ Anomaly (${anomaly.taiRatio}% Tài, z=${anomaly.zScore})`);
+    
     if (anomaly.breakDetected && anomaly.breakDirection) {
       predictions.push({ 
         prediction: anomaly.breakDirection, 
-        confidence: 70, 
-        priority: 10, 
-        name: 'Anomaly Break' 
+        confidence: 68, 
+        weight: weights.anomaly || 0.3, 
+        name: 'Anomaly Break',
+        method: 'anomaly'
       });
+      methodsUsed.anomaly = true;
     }
+    
     if (anomaly.isAlternatingAnomaly) {
       const altPrediction = results[0] === 'Tài' ? 'Xỉu' : 'Tài';
-      predictions.push({ prediction: altPrediction, confidence: 68, priority: 9, name: 'Alternating Anomaly' });
+      predictions.push({ 
+        prediction: altPrediction, 
+        confidence: 65, 
+        weight: (weights.anomaly || 0.3) * 0.8, 
+        name: 'Alternating Anomaly',
+        method: 'anomaly'
+      });
     }
   }
   
+  // 3. Monte Carlo Simulation
+  if (monteCarloSimulators[type]) {
+    const mcResult = monteCarloSimulators[type].runBalancedSimulation(data, anomalyDetector, currentHour);
+    if (mcResult && mcResult.prediction) {
+      const calibratedConf = anomalyDetector.calibrateConfidence(mcResult.confidence, 'mc');
+      predictions.push({ 
+        prediction: mcResult.prediction, 
+        confidence: calibratedConf, 
+        weight: weights.monteCarlo || 0.5, 
+        name: `Monte Carlo (${mcResult.similarPatternsCount} patterns)`,
+        method: 'monteCarlo',
+        mcDetails: mcResult
+      });
+      methodsUsed.monteCarlo = true;
+      factors.push(`MC: ${(parseFloat(mcResult.taiProbability) * 100).toFixed(0)}% Tài [${mcResult.method}]`);
+    }
+  }
+  
+  // 4. Time Window Prediction
+  const timePrediction = anomalyDetector.predictByTimeWindow(currentTime);
+  if (timePrediction) {
+    predictions.push({ 
+      prediction: timePrediction.prediction, 
+      confidence: timePrediction.confidence, 
+      weight: weights.timeWindow || 0.25, 
+      name: 'Time Window',
+      method: 'timeWindow'
+    });
+    methodsUsed.timeWindow = true;
+    factors.push(`Time: ${timePrediction.prediction} ${timePrediction.confidence}%`);
+  }
+  
+  // 5. Q-Learning Prediction
   const stateKey = rlLearner[type].getStateKey(results, []);
   const qPrediction = rlLearner[type].getQLearningPrediction(stateKey);
   if (qPrediction) {
-    predictions.push({ prediction: qPrediction, confidence: 62, priority: 6, name: 'Q-Learning' });
+    predictions.push({ 
+      prediction: qPrediction, 
+      confidence: 60, 
+      weight: weights.rl || 0.2, 
+      name: 'Q-Learning',
+      method: 'rl'
+    });
+    methodsUsed.rl = true;
     factors.push(`RL: ${qPrediction}`);
   }
   
-  predictions.sort((a, b) => b.priority - a.priority || b.confidence - a.confidence);
+  // Weighted ensemble calculation
+  let taiScore = 0, xiuScore = 0, totalWeight = 0;
   
-  let taiScore = 0, xiuScore = 0;
   predictions.forEach(p => {
-    const weight = p.priority;
-    if (p.prediction === 'Tài') taiScore += p.confidence * weight;
-    else xiuScore += p.confidence * weight;
+    const w = p.weight * (p.confidence / 100);
+    if (p.prediction === 'Tài') taiScore += w;
+    else if (p.prediction === 'Xỉu') xiuScore += w;
+    totalWeight += w;
   });
+  
+  if (totalWeight === 0) {
+    return { 
+      prediction: Math.random() > 0.5 ? 'Tài' : 'Xỉu', 
+      confidence: 50, 
+      factors: ['No clear signal'], 
+      allPredictions: predictions,
+      methodsUsed
+    };
+  }
   
   let finalPrediction = taiScore >= xiuScore ? 'Tài' : 'Xỉu';
   
+  // Apply bias correction
   const biasCorrection = anomalyDetector.getBiasCorrection();
-  if (biasCorrection > 0.1 && finalPrediction === 'Xỉu') {
-    finalPrediction = 'Tài';
-    factors.push(`Bias correction: +Tài`);
-  } else if (biasCorrection < -0.1 && finalPrediction === 'Tài') {
-    finalPrediction = 'Xỉu';
-    factors.push(`Bias correction: +Xỉu`);
+  if (Math.abs(biasCorrection) > 0.08) {
+    if (biasCorrection > 0 && finalPrediction === 'Xỉu') {
+      finalPrediction = 'Tài';
+      factors.push('Bias: Tài');
+    } else if (biasCorrection < 0 && finalPrediction === 'Tài') {
+      finalPrediction = 'Xỉu';
+      factors.push('Bias: Xỉu');
+    }
   }
   
-  const totalScore = taiScore + xiuScore;
-  let finalConfidence = totalScore > 0 ? Math.round(Math.max(taiScore, xiuScore) / totalScore * 100) : 55;
-  finalConfidence = Math.max(55, Math.min(88, finalConfidence));
+  // Calculate confidence with agreement bonus
+  const predictionsAgree = predictions.filter(p => p.prediction === finalPrediction).length;
+  const agreementBonus = (predictionsAgree / predictions.length) * 10;
   
-  return { prediction: finalPrediction, confidence: finalConfidence, factors, allPredictions: predictions };
+  let finalConfidence = Math.round((Math.max(taiScore, xiuScore) / totalWeight) * 100);
+  finalConfidence = Math.min(82, Math.max(52, finalConfidence + agreementBonus));
+  
+  // Calibrate final confidence
+  finalConfidence = Math.round(anomalyDetector.calibrateConfidence(finalConfidence, 'ensemble'));
+  
+  return { 
+    prediction: finalPrediction, 
+    confidence: finalConfidence, 
+    factors, 
+    allPredictions: predictions,
+    methodsUsed
+  };
 }
 
 // ==================== AUTO PROCESS ====================
@@ -886,9 +1267,9 @@ async function autoProcessPredictions() {
         await verifyPredictions('hu', dataHu);
         const result = calculateSuperPrediction(dataHu, 'hu');
         savePredictionToHistory('hu', nextHuPhien, result.prediction, result.confidence);
-        recordPrediction('hu', nextHuPhien, result.prediction, result.confidence, result.factors);
+        recordPrediction('hu', nextHuPhien, result.prediction, result.confidence, result.factors, result.methodsUsed);
         lastProcessedPhien.hu = nextHuPhien;
-        console.log(`[Auto] Hu ${nextHuPhien}: ${result.prediction} (${result.confidence}%) | Factors: ${result.factors.slice(0,2).join(', ')}`);
+        console.log(`[Hu #${nextHuPhien}] ${result.prediction} (${result.confidence}%) | ${result.factors.slice(0,3).join(' | ')}`);
       }
     }
     
@@ -901,9 +1282,9 @@ async function autoProcessPredictions() {
         await verifyPredictions('md5', dataMd5);
         const result = calculateSuperPrediction(dataMd5, 'md5');
         savePredictionToHistory('md5', nextMd5Phien, result.prediction, result.confidence);
-        recordPrediction('md5', nextMd5Phien, result.prediction, result.confidence, result.factors);
+        recordPrediction('md5', nextMd5Phien, result.prediction, result.confidence, result.factors, result.methodsUsed);
         lastProcessedPhien.md5 = nextMd5Phien;
-        console.log(`[Auto] MD5 ${nextMd5Phien}: ${result.prediction} (${result.confidence}%) | Factors: ${result.factors.slice(0,2).join(', ')}`);
+        console.log(`[MD5 #${nextMd5Phien}] ${result.prediction} (${result.confidence}%) | ${result.factors.slice(0,3).join(' | ')}`);
       }
     }
     
@@ -930,7 +1311,7 @@ app.get('/lc79-hu', async (req, res) => {
     const nextPhien = latestPhien + 1;
     const result = calculateSuperPrediction(data, 'hu');
     savePredictionToHistory('hu', nextPhien, result.prediction, result.confidence);
-    recordPrediction('hu', nextPhien, result.prediction, result.confidence, result.factors);
+    recordPrediction('hu', nextPhien, result.prediction, result.confidence, result.factors, result.methodsUsed);
     res.json({
       phien_hien_tai: nextPhien.toString(),
       du_doan: normalizeResult(result.prediction),
@@ -952,7 +1333,7 @@ app.get('/lc79-md5', async (req, res) => {
     const nextPhien = latestPhien + 1;
     const result = calculateSuperPrediction(data, 'md5');
     savePredictionToHistory('md5', nextPhien, result.prediction, result.confidence);
-    recordPrediction('md5', nextPhien, result.prediction, result.confidence, result.factors);
+    recordPrediction('md5', nextPhien, result.prediction, result.confidence, result.factors, result.methodsUsed);
     res.json({
       phien_hien_tai: nextPhien.toString(),
       du_doan: normalizeResult(result.prediction),
@@ -973,7 +1354,7 @@ app.get('/lc79-hu/lichsu', async (req, res) => {
       return {
         ...record,
         ket_qua_thuc_te: prediction?.actual || null,
-        status: prediction?.isCorrect === true ? '✅' : (prediction?.isCorrect === false ? '❌' : null)
+        status: prediction?.isCorrect === true ? '✅' : (prediction?.isCorrect === false ? '❌' : '⏳')
       };
     });
     res.json({ type: 'Lẩu Cua 79 - Tài Xỉu Hũ', history: historyWithStatus, total: historyWithStatus.length });
@@ -991,7 +1372,7 @@ app.get('/lc79-md5/lichsu', async (req, res) => {
       return {
         ...record,
         ket_qua_thuc_te: prediction?.actual || null,
-        status: prediction?.isCorrect === true ? '✅' : (prediction?.isCorrect === false ? '❌' : null)
+        status: prediction?.isCorrect === true ? '✅' : (prediction?.isCorrect === false ? '❌' : '⏳')
       };
     });
     res.json({ type: 'Lẩu Cua 79 - Tài Xỉu MD5', history: historyWithStatus, total: historyWithStatus.length });
@@ -1007,7 +1388,18 @@ app.get('/lc79-hu/analysis', async (req, res) => {
     updateMonteCarloSimulators('hu', data);
     await verifyPredictions('hu', data);
     const result = calculateSuperPrediction(data, 'hu');
-    res.json({ prediction: normalizeResult(result.prediction), confidence: result.confidence, factors: result.factors });
+    res.json({ 
+      prediction: normalizeResult(result.prediction), 
+      confidence: result.confidence, 
+      factors: result.factors,
+      methods: result.methodsUsed,
+      details: result.allPredictions.map(p => ({
+        method: p.method,
+        prediction: p.prediction,
+        confidence: p.confidence,
+        weight: p.weight
+      }))
+    });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -1020,52 +1412,125 @@ app.get('/lc79-md5/analysis', async (req, res) => {
     updateMonteCarloSimulators('md5', data);
     await verifyPredictions('md5', data);
     const result = calculateSuperPrediction(data, 'md5');
-    res.json({ prediction: normalizeResult(result.prediction), confidence: result.confidence, factors: result.factors });
+    res.json({ 
+      prediction: normalizeResult(result.prediction), 
+      confidence: result.confidence, 
+      factors: result.factors,
+      methods: result.methodsUsed,
+      details: result.allPredictions.map(p => ({
+        method: p.method,
+        prediction: p.prediction,
+        confidence: p.confidence,
+        weight: p.weight
+      }))
+    });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-app.get('/lc79-hu/learning', (req, res) => {
+app.get('/lc79-hu/stats', (req, res) => {
   const stats = learningData.hu;
-  const accuracy = stats.totalPredictions > 0 ? (stats.correctPredictions / stats.totalPredictions * 100).toFixed(2) : 0;
-  const recentAcc = stats.recentAccuracy.length > 0 ? (stats.recentAccuracy.reduce((a, b) => a + b, 0) / stats.recentAccuracy.length * 100).toFixed(2) : 0;
+  const accuracy = stats.totalPredictions > 0 
+    ? (stats.correctPredictions / stats.totalPredictions * 100).toFixed(2) 
+    : 0;
+  const recentAcc = stats.recentAccuracy.length > 0 
+    ? (stats.recentAccuracy.slice(-20).reduce((a, b) => a + b, 0) / Math.min(20, stats.recentAccuracy.length) * 100).toFixed(2) 
+    : 0;
+  
+  // Calculate method-specific accuracies
+  const methodAccuracies = {};
+  for (const [method, perf] of Object.entries(stats.methodPerformance)) {
+    if (perf.total > 0) {
+      methodAccuracies[method] = {
+        accuracy: (perf.correct / perf.total * 100).toFixed(2) + '%',
+        total: perf.total,
+        correct: perf.correct
+      };
+    }
+  }
+  
   res.json({
-    type: 'Lẩu Cua 79 - Tài Xỉu Hũ - Learning Stats',
+    type: 'Lẩu Cua 79 - Tài Xỉu Hũ',
     totalPredictions: stats.totalPredictions,
     correctPredictions: stats.correctPredictions,
     overallAccuracy: `${accuracy}%`,
     recentAccuracy: `${recentAcc}%`,
     streakAnalysis: stats.streakAnalysis,
+    methodPerformance: methodAccuracies,
     lastUpdate: stats.lastUpdate
   });
 });
 
-app.get('/lc79-md5/learning', (req, res) => {
+app.get('/lc79-md5/stats', (req, res) => {
   const stats = learningData.md5;
-  const accuracy = stats.totalPredictions > 0 ? (stats.correctPredictions / stats.totalPredictions * 100).toFixed(2) : 0;
-  const recentAcc = stats.recentAccuracy.length > 0 ? (stats.recentAccuracy.reduce((a, b) => a + b, 0) / stats.recentAccuracy.length * 100).toFixed(2) : 0;
+  const accuracy = stats.totalPredictions > 0 
+    ? (stats.correctPredictions / stats.totalPredictions * 100).toFixed(2) 
+    : 0;
+  const recentAcc = stats.recentAccuracy.length > 0 
+    ? (stats.recentAccuracy.slice(-20).reduce((a, b) => a + b, 0) / Math.min(20, stats.recentAccuracy.length) * 100).toFixed(2) 
+    : 0;
+  
+  const methodAccuracies = {};
+  for (const [method, perf] of Object.entries(stats.methodPerformance)) {
+    if (perf.total > 0) {
+      methodAccuracies[method] = {
+        accuracy: (perf.correct / perf.total * 100).toFixed(2) + '%',
+        total: perf.total,
+        correct: perf.correct
+      };
+    }
+  }
+  
   res.json({
-    type: 'Lẩu Cua 79 - Tài Xỉu MD5 - Learning Stats',
+    type: 'Lẩu Cua 79 - Tài Xỉu MD5',
     totalPredictions: stats.totalPredictions,
     correctPredictions: stats.correctPredictions,
     overallAccuracy: `${accuracy}%`,
     recentAccuracy: `${recentAcc}%`,
     streakAnalysis: stats.streakAnalysis,
+    methodPerformance: methodAccuracies,
     lastUpdate: stats.lastUpdate
   });
 });
 
-app.get('/reset-learning', (req, res) => {
+app.get('/reset', (req, res) => {
   learningData = {
-    hu: { predictions: [], patternStats: {}, totalPredictions: 0, correctPredictions: 0, patternWeights: { ...DEFAULT_PATTERN_WEIGHTS }, lastUpdate: null, streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 }, recentAccuracy: [] },
-    md5: { predictions: [], patternStats: {}, totalPredictions: 0, correctPredictions: 0, patternWeights: { ...DEFAULT_PATTERN_WEIGHTS }, lastUpdate: null, streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 }, recentAccuracy: [] }
+    hu: { 
+      predictions: [], patternStats: {}, totalPredictions: 0, correctPredictions: 0, 
+      patternWeights: { ...DEFAULT_PATTERN_WEIGHTS }, lastUpdate: null, 
+      streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 }, 
+      recentAccuracy: [],
+      methodPerformance: {
+        simple: { correct: 0, total: 0 },
+        monteCarlo: { correct: 0, total: 0 },
+        anomaly: { correct: 0, total: 0 },
+        ensemble: { correct: 0, total: 0 }
+      }
+    },
+    md5: { 
+      predictions: [], patternStats: {}, totalPredictions: 0, correctPredictions: 0, 
+      patternWeights: { ...DEFAULT_PATTERN_WEIGHTS }, lastUpdate: null, 
+      streakAnalysis: { wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, worstStreak: 0 }, 
+      recentAccuracy: [],
+      methodPerformance: {
+        simple: { correct: 0, total: 0 },
+        monteCarlo: { correct: 0, total: 0 },
+        anomaly: { correct: 0, total: 0 },
+        ensemble: { correct: 0, total: 0 }
+      }
+    }
   };
   monteCarloSimulators = { hu: null, md5: null };
   anomalyDetector = new AnomalyDetector();
   rlLearner = { hu: new ReinforcementLearner(), md5: new ReinforcementLearner() };
+  predictionHistory = { hu: [], md5: [] };
+  lastProcessedPhien = { hu: null, md5: null };
+  
   saveLearningData();
-  res.json({ message: 'All learning data and anomaly patterns reset' });
+  savePredictionHistory();
+  
+  res.json({ message: 'All data reset successfully' });
 });
 
 // ==================== START SERVER ====================
@@ -1073,26 +1538,47 @@ loadLearningData();
 loadPredictionHistory();
 anomalyDetector.loadAnomalyData();
 
+// Start auto-processing
 setInterval(() => autoProcessPredictions(), AUTO_SAVE_INTERVAL);
 setTimeout(() => autoProcessPredictions(), 3000);
 
+// Periodic data cleanup (every 6 hours)
+setInterval(() => {
+  // Clean old predictions
+  for (const type of ['hu', 'md5']) {
+    if (learningData[type].predictions.length > 1000) {
+      learningData[type].predictions = learningData[type].predictions.slice(0, 1000);
+    }
+    if (learningData[type].recentAccuracy.length > 500) {
+      learningData[type].recentAccuracy = learningData[type].recentAccuracy.slice(-500);
+    }
+  }
+  saveLearningData();
+}, 6 * 3600000);
+
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n╔══════════════════════════════════════════════════════════════╗`);
-  console.log(`║   LẨU CUA 79 - SUPER AI PREDICTION v6.0 - FULL CODE        ║`);
-  console.log(`║   Monte Carlo Balanced | Anomaly Detection | Q-Learning    ║`);
-  console.log(`╚══════════════════════════════════════════════════════════════╝\n`);
-  console.log(`Server: http://0.0.0.0:${PORT}`);
-  console.log(`\n🔥 CẢI TIẾN CHÍNH:`);
-  console.log(`   • Monte Carlo CÂN BẰNG - không bias về Xỉu`);
-  console.log(`   • Anomaly Detection - phát hiện điểm bất thường`);
-  console.log(`   • Break Pattern Learning - học chính xác thời điểm bẻ cầu`);
-  console.log(`   • Time Window stats - học theo khung giờ`);
-  console.log(`   • Q-Learning (Reinforcement) - thưởng/phạt thông minh`);
-  console.log(`   • Bias Correction tự động - sửa lệch dự đoán\n`);
-  console.log(`📋 ENDPOINTS:`);
-  console.log(`   GET /lc79-hu        - Dự đoán Tài Xỉu Hũ`);
-  console.log(`   GET /lc79-md5       - Dự đoán Tài Xỉu MD5`);
-  console.log(`   GET /lc79-hu/lichsu - Lịch sử dự đoán Hũ`);
-  console.log(`   GET /lc79-md5/lichsu- Lịch sử dự đoán MD5`);
-  console.log(`   GET /reset-learning - Reset dữ liệu học\n`);
+  console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
+  console.log(`║     LẨU CUA 79 - AI PREDICTION v7.0 - ACCURACY OPTIMIZED      ║`);
+  console.log(`║  Monte Carlo | Anomaly Detection | Q-Learning | Ensemble      ║`);
+  console.log(`╚══════════════════════════════════════════════════════════════════╝\n`);
+  console.log(`Server running: http://0.0.0.0:${PORT}`);
+  console.log(`\n🚀 KEY IMPROVEMENTS:`);
+  console.log(`  • Statistical anomaly detection (z-score + runs test)`);
+  console.log(`  • Entropy-based pattern features`);
+  console.log(`  • Calibrated confidence scores`);
+  console.log(`  • Weighted ensemble with method performance tracking`);
+  console.log(`  • Adaptive Monte Carlo simulation count`);
+  console.log(`  • Pattern quality scoring`);
+  console.log(`  • Time-decay weighted pattern matching`);
+  console.log(`  • Data preprocessing for outlier smoothing`);
+  console.log(`\n📋 ENDPOINTS:`);
+  console.log(`  GET /lc79-hu          - Prediction Hũ`);
+  console.log(`  GET /lc79-md5         - Prediction MD5`);
+  console.log(`  GET /lc79-hu/lichsu   - History Hũ`);
+  console.log(`  GET /lc79-md5/lichsu  - History MD5`);
+  console.log(`  GET /lc79-hu/analysis - Detailed analysis Hũ`);
+  console.log(`  GET /lc79-md5/analysis- Detailed analysis MD5`);
+  console.log(`  GET /lc79-hu/stats    - Performance stats Hũ`);
+  console.log(`  GET /lc79-md5/stats   - Performance stats MD5`);
+  console.log(`  GET /reset            - Reset all data\n`);
 });
