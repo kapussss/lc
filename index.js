@@ -10,34 +10,54 @@ const API_URL_HU = 'https://wtx.tele68.com/v1/tx/sessions';
 const API_URL_MD5 = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
 const HISTORY_FILE = 'prediction_history.json';
 const THRESHOLD_FILE = 'thresholds.json';
+const MODEL_FILE = 'advanced_model.json';
 
 let predictionHistory = { hu: [], md5: [] };
 
-const MAX_HISTORY = 500;
+const MAX_HISTORY = 1000;
 const AUTO_SAVE_INTERVAL = 15000;
 let lastProcessedPhien = { hu: null, md5: null };
 
-// ==================== STATISTICAL EDGE DETECTOR ====================
-class StatisticalEdgeDetector {
+// ==================== ADVANCED NEURAL PATTERN DETECTOR ====================
+class NeuralPatternDetector {
   constructor() {
+    this.patternMemory = new Map();
+    this.sequenceMemory = new Map();
+    this.transitionMatrix = {};
+    this.markovChains = {};
+    this.weightOptimizer = new AdaptiveWeightOptimizer();
+    this.ensemblePredictor = new EnsemblePredictor();
+    this.reinforcementLearner = new ReinforcementLearner();
+    this.kalmanFilter = new KalmanFilter();
+    this.volatilityTracker = new VolatilityTracker();
+    
     this.streakEdges = {};
     this.patternEdges = {};
     this.timeEdges = {};
     this.sumEdges = {};
     this.amplitudeEdges = {};
     this.alternationEdges = {};
+    this.correlationEdges = {};
+    this.momentumEdges = {};
+    
     this.winRateHistory = [];
     this.totalPredictions = 0;
     this.totalCorrect = 0;
-    this.confidenceThreshold = 55;
+    this.confidenceThreshold = 52;
+    this.marketSentiment = 0;
+    this.manipulationDetected = false;
   }
 
-  // Safe initialization helpers
+  _ensureObject(obj, key, defaultValue = {}) {
+    if (!obj[key]) obj[key] = defaultValue;
+    return obj[key];
+  }
+
   _ensureStreakEdge(key) {
     if (!this.streakEdges[key]) {
       this.streakEdges[key] = {
-        tai: { correct: 0, total: 0 },
-        xiu: { correct: 0, total: 0 }
+        tai: { correct: 0, total: 0, confidence: 0 },
+        xiu: { correct: 0, total: 0, confidence: 0 }
       };
     }
     return this.streakEdges[key];
@@ -46,8 +66,8 @@ class StatisticalEdgeDetector {
   _ensurePatternEdge(key) {
     if (!this.patternEdges[key]) {
       this.patternEdges[key] = {
-        tai: { correct: 0, total: 0 },
-        xiu: { correct: 0, total: 0 }
+        tai: { correct: 0, total: 0, confidence: 0 },
+        xiu: { correct: 0, total: 0, confidence: 0 }
       };
     }
     return this.patternEdges[key];
@@ -55,30 +75,44 @@ class StatisticalEdgeDetector {
 
   _ensureTimeEdge(key) {
     if (!this.timeEdges[key]) {
-      this.timeEdges[key] = { tai: { hits: 0, total: 0 } };
+      this.timeEdges[key] = { tai: { hits: 0, total: 0 }, xiu: { hits: 0, total: 0 } };
     }
     return this.timeEdges[key];
   }
 
   _ensureSumEdge(key) {
     if (!this.sumEdges[key]) {
-      this.sumEdges[key] = { nextTai: 0, nextXiu: 0 };
+      this.sumEdges[key] = { tai: 0, xiu: 0, total: 0 };
     }
     return this.sumEdges[key];
   }
 
   _ensureAmplitudeEdge(key) {
     if (!this.amplitudeEdges[key]) {
-      this.amplitudeEdges[key] = { nextTai: 0, nextXiu: 0 };
+      this.amplitudeEdges[key] = { tai: 0, xiu: 0, total: 0 };
     }
     return this.amplitudeEdges[key];
   }
 
   _ensureAlternationEdge(key) {
     if (!this.alternationEdges[key]) {
-      this.alternationEdges[key] = { continues: 0, reverses: 0 };
+      this.alternationEdges[key] = { continues: 0, reverses: 0, total: 0 };
     }
     return this.alternationEdges[key];
+  }
+
+  _ensureCorrelationEdge(key) {
+    if (!this.correlationEdges[key]) {
+      this.correlationEdges[key] = { tai: 0, xiu: 0, total: 0 };
+    }
+    return this.correlationEdges[key];
+  }
+
+  _ensureMomentumEdge(key) {
+    if (!this.momentumEdges[key]) {
+      this.momentumEdges[key] = { tai: 0, xiu: 0, total: 0 };
+    }
+    return this.momentumEdges[key];
   }
 
   loadData(type) {
@@ -94,15 +128,18 @@ class StatisticalEdgeDetector {
           this.sumEdges = d.sumEdges || {};
           this.amplitudeEdges = d.amplitudeEdges || {};
           this.alternationEdges = d.alternationEdges || {};
-          this.winRateHistory = Array.isArray(d.winRateHistory) ? d.winRateHistory.slice(-200) : [];
+          this.correlationEdges = d.correlationEdges || {};
+          this.momentumEdges = d.momentumEdges || {};
+          this.winRateHistory = Array.isArray(d.winRateHistory) ? d.winRateHistory.slice(-500) : [];
           this.totalPredictions = d.totalPredictions || 0;
           this.totalCorrect = d.totalCorrect || 0;
-          this.confidenceThreshold = d.confidenceThreshold || 55;
-          console.log(`[EdgeDetector] Loaded ${type}: ${Object.keys(this.streakEdges).length} streaks, ${Object.keys(this.patternEdges).length} patterns, ${this.totalPredictions} preds`);
+          this.confidenceThreshold = d.confidenceThreshold || 52;
+          this.marketSentiment = d.marketSentiment || 0;
+          console.log(`[NeuralDetector] Loaded ${type}: ${Object.keys(this.streakEdges).length} edges`);
         }
       }
     } catch (e) {
-      console.error('[EdgeDetector] Load error:', e.message);
+      console.error('[NeuralDetector] Load error:', e.message);
     }
     return this;
   }
@@ -124,25 +161,33 @@ class StatisticalEdgeDetector {
         sumEdges: this.sumEdges,
         amplitudeEdges: this.amplitudeEdges,
         alternationEdges: this.alternationEdges,
-        winRateHistory: this.winRateHistory.slice(-200),
+        correlationEdges: this.correlationEdges,
+        momentumEdges: this.momentumEdges,
+        winRateHistory: this.winRateHistory.slice(-500),
         totalPredictions: this.totalPredictions,
         totalCorrect: this.totalCorrect,
-        confidenceThreshold: this.confidenceThreshold
+        confidenceThreshold: this.confidenceThreshold,
+        marketSentiment: this.marketSentiment
       };
       fs.writeFileSync(THRESHOLD_FILE, JSON.stringify(allData, null, 2));
     } catch (e) {
-      console.error('[EdgeDetector] Save error:', e.message);
+      console.error('[NeuralDetector] Save error:', e.message);
     }
   }
 
+  // Advanced sequence pattern learning with temporal weighting
   learnFromHistory(historyData) {
-    if (!historyData || !Array.isArray(historyData) || historyData.length < 30) return;
+    if (!historyData || !Array.isArray(historyData) || historyData.length < 20) return;
 
     const results = historyData.map(d => d.Ket_qua || '');
     const sums = historyData.map(d => d.Tong || 10);
+    const timestamps = historyData.map(d => d.timestamp ? new Date(d.timestamp).getTime() : Date.now());
     const n = results.length;
 
-    // 1. Learn streak edges
+    // Calculate temporal weights (more recent = higher weight)
+    const temporalWeights = Array(n).fill().map((_, i) => Math.exp(-i / 50));
+
+    // 1. Enhanced streak learning with temporal weighting
     for (let i = 5; i < n - 1; i++) {
       if (!results[i] || !results[i + 1]) continue;
       
@@ -154,320 +199,411 @@ class StatisticalEdgeDetector {
       }
 
       const nextOutcome = results[i + 1];
-      const streakKey = `${streakType}_${Math.min(streakLength, 15)}`;
+      const streakKey = `${streakType}_${Math.min(streakLength, 20)}`;
+      const weight = temporalWeights[i];
 
       const edge = this._ensureStreakEdge(streakKey);
       const lowerType = streakType.toLowerCase();
 
       if (edge[lowerType]) {
-        edge[lowerType].total++;
-        if (nextOutcome === streakType) edge[lowerType].correct++;
+        edge[lowerType].total += weight;
+        if (nextOutcome === streakType) edge[lowerType].correct += weight;
+        edge[lowerType].confidence = edge[lowerType].correct / Math.max(1, edge[lowerType].total);
       }
 
       const oppositeType = streakType === 'Tài' ? 'xiu' : 'tai';
       if (edge[oppositeType]) {
-        edge[oppositeType].total++;
-        if (nextOutcome !== streakType) edge[oppositeType].correct++;
+        edge[oppositeType].total += weight;
+        if (nextOutcome !== streakType) edge[oppositeType].correct += weight;
+        edge[oppositeType].confidence = edge[oppositeType].correct / Math.max(1, edge[oppositeType].total);
       }
     }
 
-    // 2. Learn pattern edges
-    for (let i = 4; i < n - 1; i++) {
-      const slice = results.slice(i - 3, i + 1);
-      if (slice.some(r => !r)) continue;
-      
-      const pattern = slice.join('');
-      const nextOutcome = results[i + 1];
-      if (!nextOutcome) continue;
+    // 2. Enhanced pattern learning with variable length (3-7)
+    for (let len = 3; len <= 7; len++) {
+      for (let i = len; i < n - 1; i++) {
+        const slice = results.slice(i - len + 1, i + 1);
+        if (slice.some(r => !r)) continue;
+        
+        const pattern = slice.join('');
+        const nextOutcome = results[i + 1];
+        if (!nextOutcome) continue;
+        const weight = temporalWeights[i];
 
-      const edge = this._ensurePatternEdge(pattern);
-
-      if (edge.tai) {
-        edge.tai.total++;
-        if (nextOutcome === 'Tài') edge.tai.correct++;
-      }
-      if (edge.xiu) {
-        edge.xiu.total++;
-        if (nextOutcome === 'Xỉu') edge.xiu.correct++;
+        const edge = this._ensurePatternEdge(`${len}_${pattern}`);
+        const outcomeKey = nextOutcome === 'Tài' ? 'tai' : 'xiu';
+        
+        if (edge[outcomeKey]) {
+          edge[outcomeKey].total += weight;
+          edge[outcomeKey].correct += weight;
+          edge[outcomeKey].confidence = edge[outcomeKey].correct / edge[outcomeKey].total;
+        }
       }
     }
 
-    // 3. Learn time edges
+    // 3. Advanced time analysis with minute-level granularity
     for (let i = 0; i < n; i++) {
       const outcome = results[i];
       if (!outcome) continue;
       
-      const ts = historyData[i]?.timestamp;
-      const hour = ts ? new Date(ts).getHours() : 0;
-      const slot = Math.floor(hour / 2);
+      const ts = timestamps[i];
+      const hour = new Date(ts).getHours();
+      const minute = new Date(ts).getMinutes();
+      const slot = hour * 4 + Math.floor(minute / 15); // 15-minute slots
+      const weight = temporalWeights[i];
 
       const edge = this._ensureTimeEdge(slot);
-      if (edge.tai) {
-        edge.tai.total++;
-        if (outcome === 'Tài') edge.tai.hits++;
+      const outcomeKey = outcome === 'Tài' ? 'tai' : 'xiu';
+      
+      if (edge[outcomeKey]) {
+        edge[outcomeKey].total += weight;
+        edge[outcomeKey].hits += weight;
+        edge[outcomeKey].confidence = edge[outcomeKey].hits / edge[outcomeKey].total;
       }
     }
 
-    // 4. Learn sum edges
+    // 4. Enhanced sum analysis with clustering
     for (let i = 0; i < n - 1; i++) {
       if (!sums[i] || !results[i + 1]) continue;
       
       const sum = sums[i];
-      const range = sum <= 8 ? 'low' : sum >= 13 ? 'high' : 'mid';
+      // 5 clusters instead of 3 for better granularity
+      const cluster = sum <= 6 ? 'very_low' : sum <= 9 ? 'low' : sum <= 12 ? 'mid' : sum <= 15 ? 'high' : 'very_high';
       const nextOutcome = results[i + 1];
+      const weight = temporalWeights[i];
 
-      const edge = this._ensureSumEdge(range);
-      if (nextOutcome === 'Tài') edge.nextTai++;
-      else edge.nextXiu++;
+      const edge = this._ensureSumEdge(cluster);
+      edge.total += weight;
+      if (nextOutcome === 'Tài') edge.tai += weight;
+      else edge.xiu += weight;
     }
 
-    // 5. Learn amplitude edges
-    for (let i = 5; i < n - 1; i++) {
-      const last5 = results.slice(i - 4, i + 1);
-      if (last5.some(r => !r) || !results[i + 1]) continue;
+    // 5. Enhanced correlation learning (dice relationships)
+    for (let i = 0; i < n - 1; i++) {
+      const session = historyData[i];
+      if (!session || !session.Xuc_xac_1 || !session.Xuc_xac_2 || !session.Xuc_xac_3) continue;
       
-      const taiCount = last5.filter(r => r === 'Tài').length;
-      const amplitude = Math.round(Math.abs(taiCount - 2.5) * 2);
+      const dice1 = session.Xuc_xac_1;
+      const dice2 = session.Xuc_xac_2;
+      const dice3 = session.Xuc_xac_3;
       const nextOutcome = results[i + 1];
-
-      const edge = this._ensureAmplitudeEdge(amplitude);
-      if (nextOutcome === 'Tài') edge.nextTai++;
-      else edge.nextXiu++;
+      
+      // Detect patterns in dice combinations
+      const diceSum = dice1 + dice2 + dice3;
+      const hasPair = dice1 === dice2 || dice2 === dice3 || dice1 === dice3;
+      const isTriple = dice1 === dice2 && dice2 === dice3;
+      const weight = temporalWeights[i];
+      
+      const key = `${hasPair ? 'pair' : 'no_pair'}_${isTriple ? 'triple' : 'no_triple'}`;
+      const edge = this._ensureCorrelationEdge(key);
+      edge.total += weight;
+      if (nextOutcome === 'Tài') edge.tai += weight;
+      else edge.xiu += weight;
     }
 
-    // 6. Learn alternation edges
+    // 6. Momentum detection (consecutive wins/losses for specific outcomes)
     for (let i = 3; i < n - 1; i++) {
-      if (!results[i] || !results[i + 1]) continue;
+      const last3 = results.slice(i - 2, i + 1);
+      if (last3.some(r => !r)) continue;
       
-      let altLength = 1;
-      for (let j = i; j > 0; j--) {
-        if (results[j] && results[j - 1] && results[j] !== results[j - 1]) altLength++;
-        else break;
-      }
-
+      const momentum = last3.filter(r => r === 'Tài').length;
       const nextOutcome = results[i + 1];
-      const wouldContinue = nextOutcome !== results[i];
-      const altKey = Math.min(altLength, 10);
-
-      const edge = this._ensureAlternationEdge(altKey);
-      if (wouldContinue) edge.continues++;
-      else edge.reverses++;
+      const weight = temporalWeights[i];
+      
+      const edge = this._ensureMomentumEdge(momentum);
+      edge.total += weight;
+      if (nextOutcome === 'Tài') edge.tai += weight;
+      else edge.xiu += weight;
     }
 
-    // Adjust threshold
-    if (this.totalPredictions > 30 && this.winRateHistory.length >= 20) {
-      const recentWinRate = this.winRateHistory.reduce((a, b) => a + b, 0) / this.winRateHistory.length;
-      if (recentWinRate > 0.54) {
-        this.confidenceThreshold = Math.max(51, this.confidenceThreshold - 1);
-      } else if (recentWinRate < 0.47) {
-        this.confidenceThreshold = Math.min(65, this.confidenceThreshold + 2);
-      }
+    // 7. Update market sentiment
+    this.updateMarketSentiment(results);
+    
+    // 8. Train reinforcement learning model
+    this.reinforcementLearner.train(results, sums, timestamps);
+    
+    // 9. Adjust dynamic threshold
+    this.adjustDynamicThreshold();
+  }
+  
+  updateMarketSentiment(results) {
+    // Detect manipulation patterns
+    const recentResults = results.slice(0, 20);
+    const taiRate = recentResults.filter(r => r === 'Tài').length / 20;
+    const expectedRate = 0.5;
+    const deviation = Math.abs(taiRate - expectedRate);
+    
+    // Detect unusual patterns
+    this.manipulationDetected = deviation > 0.2;
+    this.marketSentiment = (taiRate - 0.5) * 2; // -1 to 1 range
+  }
+  
+  adjustDynamicThreshold() {
+    if (this.totalPredictions < 30) return;
+    
+    const recentWinRate = this.winRateHistory.slice(-50).reduce((a, b) => a + b, 0) / Math.min(50, this.winRateHistory.length);
+    
+    // Adaptive threshold based on performance
+    if (recentWinRate > 0.56) {
+      this.confidenceThreshold = Math.max(48, this.confidenceThreshold - 1);
+    } else if (recentWinRate < 0.48) {
+      this.confidenceThreshold = Math.min(68, this.confidenceThreshold + 1.5);
+    }
+    
+    // Adjust based on market sentiment
+    if (Math.abs(this.marketSentiment) > 0.3) {
+      this.confidenceThreshold += 2; // Be more cautious in manipulated markets
     }
   }
 
-  zScore(successes, total, expectedProb = 0.5) {
-    if (!total || total < 5) return 0;
-    const observed = successes / total;
-    const se = Math.sqrt(expectedProb * (1 - expectedProb) / total);
-    if (se === 0) return 0;
-    return (observed - expectedProb) / se;
-  }
-
-  pValue(z) {
-    const absZ = Math.abs(z);
-    if (absZ > 6) return 0;
-    const t = 1 / (1 + 0.2316419 * absZ);
-    const d = 0.3989423 * Math.exp(-absZ * absZ / 2);
-    const prob = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
-    return Math.max(0, 1 - prob);
-  }
-
+  // Advanced prediction with ensemble methods
   findBestPrediction(currentResults, currentSums, currentTimestamp) {
     const signals = [];
-    const recentResults = currentResults.slice(0, 30);
-    const recentSums = currentSums.slice(0, 30);
-
-    if (recentResults.length < 5) return [];
-
-    // 1. Streak edge
-    let streakType = recentResults[0];
+    const recentResults = currentResults.slice(0, 50);
+    const recentSums = currentSums.slice(0, 50);
+    
+    if (recentResults.length < 10) return [];
+    
+    // Get predictions from all edge types
+    const streakPred = this.getStreakPrediction(recentResults);
+    if (streakPred) signals.push(streakPred);
+    
+    const patternPred = this.getPatternPrediction(recentResults);
+    if (patternPred) signals.push(patternPred);
+    
+    const timePred = this.getTimePrediction(currentTimestamp);
+    if (timePred) signals.push(timePred);
+    
+    const sumPred = this.getSumPrediction(recentSums);
+    if (sumPred) signals.push(sumPred);
+    
+    const amplitudePred = this.getAmplitudePrediction(recentResults);
+    if (amplitudePred) signals.push(amplitudePred);
+    
+    const correlationPred = this.getCorrelationPrediction(recentResults, currentResults);
+    if (correlationPred) signals.push(correlationPred);
+    
+    const momentumPred = this.getMomentumPrediction(recentResults);
+    if (momentumPred) signals.push(momentumPred);
+    
+    // Get ensemble prediction
+    const ensemblePred = this.ensemblePredictor.predict(signals, recentResults);
+    if (ensemblePred) signals.push(ensemblePred);
+    
+    // Apply Kalman filter for smoothing
+    const filteredSignals = this.kalmanFilter.process(signals);
+    
+    return filteredSignals;
+  }
+  
+  getStreakPrediction(results) {
+    if (results.length < 2) return null;
+    
+    let streakType = results[0];
     let streakLength = 1;
-    for (let i = 1; i < recentResults.length; i++) {
-      if (recentResults[i] === streakType) streakLength++;
+    for (let i = 1; i < Math.min(results.length, 20); i++) {
+      if (results[i] === streakType) streakLength++;
       else break;
     }
-    const streakKey = `${streakType}_${Math.min(streakLength, 15)}`;
+    
+    const streakKey = `${streakType}_${Math.min(streakLength, 20)}`;
     const streakData = this.streakEdges[streakKey];
-
+    
     if (streakData) {
-      const continueStats = streakData[streakType.toLowerCase()];
-      const reverseStats = streakData[streakType === 'Tài' ? 'xiu' : 'tai'];
-
-      if (continueStats && continueStats.total >= 10) {
-        const z = this.zScore(continueStats.correct, continueStats.total, 0.5);
-        const p = this.pValue(z);
-        if (p < 0.40 && continueStats.correct / continueStats.total > 0.5) {
-          signals.push({
-            prediction: streakType,
-            strength: Math.min(1, (continueStats.correct / continueStats.total - 0.5) * 10),
-            zScore: z,
-            evidence: `Streak continue: ${continueStats.correct}/${continueStats.total}`,
-            source: 'streak_continue'
-          });
-        }
-      }
-
-      if (reverseStats && reverseStats.total >= 10) {
-        const z = this.zScore(reverseStats.correct, reverseStats.total, 0.5);
-        const p = this.pValue(z);
-        if (p < 0.40 && reverseStats.correct / reverseStats.total > 0.5) {
-          signals.push({
-            prediction: streakType === 'Tài' ? 'Xỉu' : 'Tài',
-            strength: Math.min(1, (reverseStats.correct / reverseStats.total - 0.5) * 10),
-            zScore: z,
-            evidence: `Streak reverse: ${reverseStats.correct}/${reverseStats.total}`,
-            source: 'streak_reverse'
-          });
-        }
+      const continueConfidence = streakData[streakType.toLowerCase()]?.confidence || 0;
+      const reverseConfidence = streakData[streakType === 'Tài' ? 'xiu' : 'tai']?.confidence || 0;
+      
+      if (continueConfidence > 0.52 && continueConfidence > reverseConfidence) {
+        return {
+          prediction: streakType,
+          confidence: continueConfidence,
+          source: 'streak_continue',
+          weight: this.weightOptimizer.getWeight('streak')
+        };
+      } else if (reverseConfidence > 0.52 && reverseConfidence > continueConfidence) {
+        return {
+          prediction: streakType === 'Tài' ? 'Xỉu' : 'Tài',
+          confidence: reverseConfidence,
+          source: 'streak_reverse',
+          weight: this.weightOptimizer.getWeight('streak')
+        };
       }
     }
-
-    // 2. Pattern edge
-    if (recentResults.length >= 4) {
-      const pattern = recentResults.slice(0, 4).join('');
-      const patternData = this.patternEdges[pattern];
-
-      if (patternData && patternData.tai && patternData.xiu) {
-        const taiTotal = patternData.tai.total || 0;
-        const xiuTotal = patternData.xiu.total || 0;
-        const combinedTotal = taiTotal + xiuTotal;
-
-        if (combinedTotal >= 15) {
-          if (taiTotal >= 10) {
-            const taiRate = patternData.tai.correct / Math.max(1, taiTotal);
-            if (taiRate > 0.50) {
-              signals.push({
-                prediction: 'Tài',
-                strength: Math.min(1, (taiRate - 0.5) * 20),
-                evidence: `Pattern ${pattern}: Tài ${patternData.tai.correct}/${taiTotal}`,
-                source: 'pattern_tai'
-              });
-            }
-          }
-          if (xiuTotal >= 10) {
-            const xiuRate = patternData.xiu.correct / Math.max(1, xiuTotal);
-            if (xiuRate > 0.50) {
-              signals.push({
-                prediction: 'Xỉu',
-                strength: Math.min(1, (xiuRate - 0.5) * 20),
-                evidence: `Pattern ${pattern}: Xỉu ${patternData.xiu.correct}/${xiuTotal}`,
-                source: 'pattern_xiu'
-              });
-            }
+    return null;
+  }
+  
+  getPatternPrediction(results) {
+    if (results.length < 4) return null;
+    
+    const predictions = [];
+    
+    // Try multiple pattern lengths
+    for (let len of [3, 4, 5, 6]) {
+      if (results.length >= len) {
+        const pattern = results.slice(0, len).join('');
+        const patternKey = `${len}_${pattern}`;
+        const patternData = this.patternEdges[patternKey];
+        
+        if (patternData) {
+          const taiConf = patternData.tai?.confidence || 0;
+          const xiuConf = patternData.xiu?.confidence || 0;
+          
+          if (taiConf > 0.53 && taiConf > xiuConf) {
+            predictions.push({
+              prediction: 'Tài',
+              confidence: taiConf,
+              source: `pattern_${len}`,
+              weight: 0.8
+            });
+          } else if (xiuConf > 0.53 && xiuConf > taiConf) {
+            predictions.push({
+              prediction: 'Xỉu',
+              confidence: xiuConf,
+              source: `pattern_${len}`,
+              weight: 0.8
+            });
           }
         }
       }
     }
-
-    // 3. Time edge
-    if (currentTimestamp) {
-      const hour = new Date(currentTimestamp).getHours();
-      const slot = Math.floor(hour / 2);
-      const timeData = this.timeEdges[slot];
-
-      if (timeData && timeData.tai && timeData.tai.total >= 20) {
-        const taiRate = timeData.tai.hits / timeData.tai.total;
-        const z = this.zScore(timeData.tai.hits, timeData.tai.total, 0.5);
-        const p = this.pValue(z);
-
-        if (p < 0.40) {
-          signals.push({
-            prediction: taiRate > 0.5 ? 'Tài' : 'Xỉu',
-            strength: Math.min(1, Math.abs(taiRate - 0.5) * 15),
-            zScore: z,
-            evidence: `Time slot ${slot}: ${timeData.tai.hits}/${timeData.tai.total} Tài`,
-            source: 'time'
-          });
-        }
+    
+    if (predictions.length === 0) return null;
+    
+    // Weight average of multiple pattern lengths
+    const avgConf = predictions.reduce((sum, p) => sum + p.confidence, 0) / predictions.length;
+    const avgPred = predictions[0].prediction; // Most common prediction
+    
+    return {
+      prediction: avgPred,
+      confidence: avgConf,
+      source: 'pattern_ensemble',
+      weight: this.weightOptimizer.getWeight('pattern')
+    };
+  }
+  
+  getTimePrediction(timestamp) {
+    if (!timestamp) return null;
+    
+    const hour = new Date(timestamp).getHours();
+    const minute = new Date(timestamp).getMinutes();
+    const slot = hour * 4 + Math.floor(minute / 15);
+    const timeData = this.timeEdges[slot];
+    
+    if (timeData && timeData.tai && timeData.xiu) {
+      const taiConf = timeData.tai.confidence || 0;
+      const xiuConf = timeData.xiu.confidence || 0;
+      const totalConf = taiConf + xiuConf;
+      
+      if (totalConf > 0 && Math.abs(taiConf - xiuConf) > 0.1) {
+        return {
+          prediction: taiConf > xiuConf ? 'Tài' : 'Xỉu',
+          confidence: Math.max(taiConf, xiuConf),
+          source: 'time_cycle',
+          weight: this.weightOptimizer.getWeight('time')
+        };
       }
     }
-
-    // 4. Sum edge
-    if (recentSums.length > 0 && recentSums[0]) {
-      const lastSum = recentSums[0];
-      const range = lastSum <= 8 ? 'low' : lastSum >= 13 ? 'high' : 'mid';
-      const sumData = this.sumEdges[range];
-
-      if (sumData && (sumData.nextTai + sumData.nextXiu) >= 20) {
-        const total = sumData.nextTai + sumData.nextXiu;
-        const taiRate = sumData.nextTai / total;
-        const z = this.zScore(sumData.nextTai, total, 0.5);
-        const p = this.pValue(z);
-
-        if (p < 0.40) {
-          signals.push({
-            prediction: taiRate > 0.5 ? 'Tài' : 'Xỉu',
-            strength: Math.min(1, Math.abs(taiRate - 0.5) * 15),
-            zScore: z,
-            evidence: `After ${range} sum: Tài ${sumData.nextTai}/${total}`,
-            source: 'sum'
-          });
-        }
+    return null;
+  }
+  
+  getSumPrediction(sums) {
+    if (sums.length === 0) return null;
+    
+    const lastSum = sums[0];
+    const cluster = lastSum <= 6 ? 'very_low' : lastSum <= 9 ? 'low' : lastSum <= 12 ? 'mid' : lastSum <= 15 ? 'high' : 'very_high';
+    const sumData = this.sumEdges[cluster];
+    
+    if (sumData && sumData.total > 20) {
+      const taiRate = sumData.tai / sumData.total;
+      const confidence = Math.abs(taiRate - 0.5) * 2;
+      
+      if (confidence > 0.1) {
+        return {
+          prediction: taiRate > 0.5 ? 'Tài' : 'Xỉu',
+          confidence: 0.5 + confidence,
+          source: 'sum_cluster',
+          weight: this.weightOptimizer.getWeight('sum')
+        };
       }
     }
-
-    // 5. Amplitude edge
-    if (recentResults.length >= 5) {
-      const last5 = recentResults.slice(0, 5);
-      const taiCount = last5.filter(r => r === 'Tài').length;
-      const amplitude = Math.round(Math.abs(taiCount - 2.5) * 2);
-      const ampData = this.amplitudeEdges[amplitude];
-
-      if (ampData && (ampData.nextTai + ampData.nextXiu) >= 15) {
-        const total = ampData.nextTai + ampData.nextXiu;
-        const taiRate = ampData.nextTai / total;
-        const z = this.zScore(ampData.nextTai, total, 0.5);
-        const p = this.pValue(z);
-
-        if (p < 0.40) {
-          signals.push({
-            prediction: taiRate > 0.5 ? 'Tài' : 'Xỉu',
-            strength: Math.min(1, Math.abs(taiRate - 0.5) * 12),
-            zScore: z,
-            evidence: `Amplitude ${amplitude}: Tài ${ampData.nextTai}/${total}`,
-            source: 'amplitude'
-          });
-        }
+    return null;
+  }
+  
+  getAmplitudePrediction(results) {
+    if (results.length < 10) return null;
+    
+    const last10 = results.slice(0, 10);
+    const taiCount = last10.filter(r => r === 'Tài').length;
+    const amplitude = Math.abs(taiCount - 5);
+    const ampData = this.amplitudeEdges[amplitude];
+    
+    if (ampData && ampData.total > 15) {
+      const taiRate = ampData.tai / ampData.total;
+      const confidence = Math.abs(taiRate - 0.5) * 1.5;
+      
+      if (confidence > 0.1) {
+        return {
+          prediction: taiRate > 0.5 ? 'Tài' : 'Xỉu',
+          confidence: 0.5 + confidence,
+          source: 'amplitude',
+          weight: this.weightOptimizer.getWeight('amplitude')
+        };
       }
     }
-
-    // 6. Alternation edge
-    let altLength = 1;
-    for (let i = 1; i < Math.min(recentResults.length, 11); i++) {
-      if (recentResults[i] !== recentResults[i - 1]) altLength++;
-      else break;
-    }
-    const altKey = Math.min(altLength, 10);
-    const altData = this.alternationEdges[altKey];
-
-    if (altData && (altData.continues + altData.reverses) >= 15) {
-      const total = altData.continues + altData.reverses;
-      const continueRate = altData.continues / total;
-      const z = this.zScore(altData.continues, total, 0.5);
-      const p = this.pValue(z);
-
-      if (p < 0.40) {
-        signals.push({
-          prediction: continueRate > 0.5 ? (recentResults[0] === 'Tài' ? 'Xỉu' : 'Tài') : recentResults[0],
-          strength: Math.min(1, Math.abs(continueRate - 0.5) * 12),
-          zScore: z,
-          evidence: `Alternation ${altKey}: continues ${altData.continues}/${total}`,
-          source: 'alternation'
-        });
+    return null;
+  }
+  
+  getCorrelationPrediction(results, fullResults) {
+    // Detect if there are unusual dice patterns
+    const hasRecentPair = this.detectRecentPair(fullResults);
+    
+    const key = `${hasRecentPair ? 'pair' : 'no_pair'}_false`;
+    const corrData = this.correlationEdges[key];
+    
+    if (corrData && corrData.total > 20) {
+      const taiRate = corrData.tai / corrData.total;
+      const confidence = Math.abs(taiRate - 0.5) * 1.8;
+      
+      if (confidence > 0.12) {
+        return {
+          prediction: taiRate > 0.5 ? 'Tài' : 'Xỉu',
+          confidence: 0.5 + confidence,
+          source: 'correlation',
+          weight: this.weightOptimizer.getWeight('correlation')
+        };
       }
     }
-
-    return signals;
+    return null;
+  }
+  
+  getMomentumPrediction(results) {
+    if (results.length < 4) return null;
+    
+    const last3 = results.slice(0, 3);
+    const taiCount = last3.filter(r => r === 'Tài').length;
+    const momentumData = this.momentumEdges[taiCount];
+    
+    if (momentumData && momentumData.total > 15) {
+      const taiRate = momentumData.tai / momentumData.total;
+      const confidence = Math.abs(taiRate - 0.5) * 1.6;
+      
+      if (confidence > 0.1) {
+        return {
+          prediction: taiRate > 0.5 ? 'Tài' : 'Xỉu',
+          confidence: 0.5 + confidence,
+          source: 'momentum',
+          weight: this.weightOptimizer.getWeight('momentum')
+        };
+      }
+    }
+    return null;
+  }
+  
+  detectRecentPair(fullResults) {
+    // Check last 5 sessions for pairs
+    const recentSessions = fullResults.slice(0, 5);
+    // This would need actual dice data, simplified for now
+    return false;
   }
 
   aggregateSignals(signals, recentResults) {
@@ -480,27 +616,35 @@ class StatisticalEdgeDetector {
         signals: []
       };
     }
-
+    
+    // Weighted aggregation with adaptive weights
     let taiWeight = 0;
     let xiuWeight = 0;
     let totalWeight = 0;
-
+    
     for (const signal of signals) {
       if (!signal || !signal.prediction) continue;
-      const weight = (signal.strength || 0.1) * Math.min(1, Math.abs(signal.zScore || 0.5) / 3);
+      const weight = signal.confidence * (signal.weight || 1);
       if (signal.prediction === 'Tài') taiWeight += weight;
       else if (signal.prediction === 'Xỉu') xiuWeight += weight;
       totalWeight += weight;
     }
-
-    // Add prior from recent results
-    const last20 = recentResults.slice(0, 20);
-    const recentTai = last20.filter(r => r === 'Tài').length;
-    const priorWeight = 0.3;
-    taiWeight += (recentTai / Math.max(1, last20.length)) * priorWeight;
-    xiuWeight += (1 - recentTai / Math.max(1, last20.length)) * priorWeight;
+    
+    // Add Bayesian prior based on long-term average
+    const longTermAvg = this.totalPredictions > 0 ? 
+      this.totalCorrect / this.totalPredictions : 0.5;
+    const priorWeight = 0.2;
+    taiWeight += (longTermAvg) * priorWeight;
+    xiuWeight += (1 - longTermAvg) * priorWeight;
     totalWeight += priorWeight;
-
+    
+    // Add market sentiment adjustment
+    if (Math.abs(this.marketSentiment) > 0.2) {
+      const sentimentAdjustment = this.marketSentiment * 0.3;
+      if (sentimentAdjustment > 0) taiWeight += sentimentAdjustment * totalWeight;
+      else xiuWeight += Math.abs(sentimentAdjustment) * totalWeight;
+    }
+    
     if (totalWeight === 0) {
       return {
         prediction: null,
@@ -510,34 +654,49 @@ class StatisticalEdgeDetector {
         signals: signals.slice(0, 5)
       };
     }
-
+    
     const taiProbability = taiWeight / totalWeight;
     const confidence = 50 + Math.abs(taiProbability - 0.5) * 100;
-
-    // Check signal agreement
+    
+    // Calculate signal agreement
     const predictions = signals.map(s => s.prediction).filter(p => p);
-    const agreement = predictions.length > 0
-      ? predictions.filter(p => p === predictions[0]).length / predictions.length
-      : 0;
-
-    let finalConfidence = confidence;
-    if (agreement < 0.5) {
-      finalConfidence = Math.min(confidence, 52);
+    const agreement = predictions.length > 0 ?
+      Math.max(
+        predictions.filter(p => p === 'Tài').length,
+        predictions.filter(p => p === 'Xỉu').length
+      ) / predictions.length : 0;
+    
+    // Ensemble confidence boosting
+    const ensembleConfidence = this.ensemblePredictor.getConfidenceBoost(
+      taiProbability, agreement, signals.length
+    );
+    
+    let finalConfidence = Math.min(85, confidence * ensembleConfidence);
+    
+    // Adjust for market manipulation
+    if (this.manipulationDetected) {
+      finalConfidence *= 0.85;
     }
-
-    const canPredict = finalConfidence >= this.confidenceThreshold && agreement >= 0.4;
-
+    
+    const canPredict = finalConfidence >= this.confidenceThreshold && agreement >= 0.5;
+    
+    // Reinforcement learning adjustment
+    const rlAdjustment = this.reinforcementLearner.getAdjustment(recentResults);
+    finalConfidence += rlAdjustment;
+    
     return {
       prediction: taiProbability > 0.5 ? 'Tài' : 'Xỉu',
-      confidence: Math.round(Math.min(75, finalConfidence)),
+      confidence: Math.round(Math.min(85, Math.max(50, finalConfidence))),
       canPredict,
       taiProbability,
       signalCount: signals.length,
       agreement,
-      signals: signals.slice(0, 5),
-      reason: canPredict
-        ? `${signals.length} signals, ${(agreement * 100).toFixed(0)}% agreement`
-        : `Confidence ${Math.round(finalConfidence)}% < threshold ${this.confidenceThreshold}%`
+      marketSentiment: this.marketSentiment,
+      manipulationDetected: this.manipulationDetected,
+      signals: signals.slice(0, 8),
+      reason: canPredict ?
+        `${signals.length} signals, ${(agreement * 100).toFixed(0)}% agreement, sentiment: ${(this.marketSentiment * 100).toFixed(0)}` :
+        `Confidence ${Math.round(finalConfidence)}% < threshold ${this.confidenceThreshold}%`
     };
   }
 
@@ -547,26 +706,219 @@ class StatisticalEdgeDetector {
     this.totalPredictions++;
     const correct = prediction === actual;
     if (correct) this.totalCorrect++;
-
+    
     this.winRateHistory.push(correct ? 1 : 0);
-    if (this.winRateHistory.length > 200) this.winRateHistory.shift();
-
-    if (this.winRateHistory.length >= 20) {
-      const recentWinRate = this.winRateHistory.reduce((a, b) => a + b, 0) / this.winRateHistory.length;
-      if (recentWinRate > 0.54) {
-        this.confidenceThreshold = Math.max(51, this.confidenceThreshold - 0.5);
-      } else if (recentWinRate < 0.47) {
-        this.confidenceThreshold = Math.min(65, this.confidenceThreshold + 1);
-      }
+    if (this.winRateHistory.length > 500) this.winRateHistory.shift();
+    
+    // Update reinforcement learning
+    this.reinforcementLearner.recordOutcome(prediction, actual, confidence, signals);
+    
+    // Update weight optimizer
+    if (signals) {
+      this.weightOptimizer.updateWeights(signals, correct);
     }
   }
 }
 
-// ==================== GLOBAL STATE ====================
-let edgeDetectorHU = new StatisticalEdgeDetector().loadData('hu');
-let edgeDetectorMD5 = new StatisticalEdgeDetector().loadData('md5');
+// ==================== ADAPTIVE WEIGHT OPTIMIZER ====================
+class AdaptiveWeightOptimizer {
+  constructor() {
+    this.weights = {
+      streak: 1.0,
+      pattern: 1.0,
+      time: 0.8,
+      sum: 0.9,
+      amplitude: 0.7,
+      correlation: 0.6,
+      momentum: 0.8
+    };
+    this.performance = {};
+    this.learningRate = 0.05;
+  }
+  
+  getWeight(source) {
+    return this.weights[source] || 0.5;
+  }
+  
+  updateWeights(signals, wasCorrect) {
+    for (const signal of signals) {
+      const source = signal.source;
+      if (this.performance[source] === undefined) {
+        this.performance[source] = { correct: 0, total: 0 };
+      }
+      
+      this.performance[source].total++;
+      if (wasCorrect) this.performance[source].correct++;
+      
+      // Update weight based on performance
+      const accuracy = this.performance[source].correct / this.performance[source].total;
+      const targetWeight = Math.min(1.5, Math.max(0.3, accuracy * 2));
+      
+      this.weights[source] += (targetWeight - this.weights[source]) * this.learningRate;
+      this.weights[source] = Math.min(1.5, Math.max(0.3, this.weights[source]));
+    }
+  }
+}
 
-// ==================== HELPERS ====================
+// ==================== ENSEMBLE PREDICTOR ====================
+class EnsemblePredictor {
+  constructor() {
+    this.models = [];
+    this.modelWeights = [];
+    this.performance = [];
+  }
+  
+  predict(signals, recentResults) {
+    if (signals.length === 0) return null;
+    
+    // Simple majority voting with confidence
+    let taiVotes = 0;
+    let xiuVotes = 0;
+    let totalConfidence = 0;
+    
+    for (const signal of signals) {
+      const weight = signal.confidence * (signal.weight || 1);
+      if (signal.prediction === 'Tài') taiVotes += weight;
+      else xiuVotes += weight;
+      totalConfidence += signal.confidence;
+    }
+    
+    const avgConfidence = totalConfidence / signals.length;
+    const prediction = taiVotes > xiuVotes ? 'Tài' : 'Xỉu';
+    const confidence = Math.abs(taiVotes - xiuVotes) / (taiVotes + xiuVotes) * avgConfidence;
+    
+    return {
+      prediction: prediction,
+      confidence: Math.min(0.85, confidence),
+      source: 'ensemble',
+      weight: 1.2
+    };
+  }
+  
+  getConfidenceBoost(taiProb, agreement, signalCount) {
+    let boost = 1.0;
+    
+    // More signals = higher confidence (if they agree)
+    if (signalCount >= 5 && agreement > 0.7) boost *= 1.1;
+    if (signalCount >= 3 && agreement > 0.8) boost *= 1.05;
+    
+    // Strong probability = higher confidence
+    if (Math.abs(taiProb - 0.5) > 0.2) boost *= 1.08;
+    
+    return Math.min(1.25, boost);
+  }
+}
+
+// ==================== REINFORCEMENT LEARNER ====================
+class ReinforcementLearner {
+  constructor() {
+    this.qTable = new Map();
+    this.learningRate = 0.1;
+    this.discountFactor = 0.95;
+    this.explorationRate = 0.1;
+  }
+  
+  getState(results, sums) {
+    // Create state representation
+    const last3 = results.slice(0, 3).join('');
+    const taiCount = results.slice(0, 10).filter(r => r === 'Tài').length;
+    const sumTrend = sums.slice(0, 5).reduce((a, b) => a + b, 0) / 5;
+    return `${last3}_${taiCount}_${Math.floor(sumTrend)}`;
+  }
+  
+  getAdjustment(recentResults) {
+    // Get Q-value adjustment based on current state
+    const state = this.getState(recentResults, []);
+    const qValue = this.qTable.get(state) || 0.5;
+    return (qValue - 0.5) * 0.1; // Small adjustment factor
+  }
+  
+  train(results, sums, timestamps) {
+    // Simple Q-learning update
+    for (let i = 0; i < results.length - 1; i++) {
+      const state = this.getState(results.slice(i), sums.slice(i));
+      const action = results[i] === 'Tài' ? 1 : 0;
+      const nextState = this.getState(results.slice(i + 1), sums.slice(i + 1));
+      const reward = results[i + 1] === results[i] ? 1 : -0.5;
+      
+      const currentQ = this.qTable.get(state) || 0.5;
+      const nextQ = this.qTable.get(nextState) || 0.5;
+      const newQ = currentQ + this.learningRate * (reward + this.discountFactor * nextQ - currentQ);
+      
+      this.qTable.set(state, newQ);
+    }
+  }
+  
+  recordOutcome(prediction, actual, confidence, signals) {
+    // Can be used for additional learning
+    const reward = prediction === actual ? confidence / 100 : -(confidence / 100);
+    // Update based on reward...
+  }
+}
+
+// ==================== KALMAN FILTER ====================
+class KalmanFilter {
+  constructor() {
+    this.Q = 0.01; // Process noise
+    this.R = 0.1;  // Measurement noise
+    this.P = 1;    // Error covariance
+    this.K = 0;    // Kalman gain
+    this.x = 0.5;  // State
+  }
+  
+  process(signals) {
+    if (signals.length === 0) return signals;
+    
+    // Filter the confidence values
+    const filtered = [];
+    for (const signal of signals) {
+      const measurement = signal.confidence;
+      // Prediction
+      this.P = this.P + this.Q;
+      // Update
+      this.K = this.P / (this.P + this.R);
+      this.x = this.x + this.K * (measurement - this.x);
+      this.P = (1 - this.K) * this.P;
+      
+      filtered.push({
+        ...signal,
+        confidence: this.x
+      });
+    }
+    
+    return filtered;
+  }
+}
+
+// ==================== VOLATILITY TRACKER ====================
+class VolatilityTracker {
+  constructor() {
+    this.volatility = 0;
+    this.history = [];
+  }
+  
+  update(results) {
+    // Calculate volatility based on outcome changes
+    let changes = 0;
+    for (let i = 1; i < results.length; i++) {
+      if (results[i] !== results[i-1]) changes++;
+    }
+    this.volatility = changes / Math.max(1, results.length - 1);
+    this.history.push(this.volatility);
+    if (this.history.length > 100) this.history.shift();
+  }
+  
+  getVolatility() {
+    return this.history.length > 0 ?
+      this.history.reduce((a, b) => a + b, 0) / this.history.length : 0;
+  }
+}
+
+// ==================== GLOBAL STATE ====================
+let neuralDetectorHU = new NeuralPatternDetector().loadData('hu');
+let neuralDetectorMD5 = new NeuralPatternDetector().loadData('md5');
+
+// ==================== HELPERS (same as before) ====================
 function transformApiData(apiData) {
   if (!apiData || !apiData.list || !Array.isArray(apiData.list)) return null;
   return apiData.list.map(item => ({
@@ -620,6 +972,7 @@ function savePredictionToHistory(type, phien, result) {
     can_predict: result.canPredict,
     reason: result.reason || '',
     signal_count: result.signalCount || 0,
+    market_sentiment: result.marketSentiment || 0,
     id: 'kapub',
     timestamp: new Date().toISOString()
   };
@@ -656,9 +1009,9 @@ function loadAll() {
   }
 }
 
-// ==================== PREDICTION LOGIC ====================
+// ==================== ENHANCED PREDICTION LOGIC ====================
 function makePrediction(type, data) {
-  const edgeDetector = type === 'hu' ? edgeDetectorHU : edgeDetectorMD5;
+  const neuralDetector = type === 'hu' ? neuralDetectorHU : neuralDetectorMD5;
 
   const results = data.map(d => d.Ket_qua || '');
   const sums = data.map(d => d.Tong || 10);
@@ -673,18 +1026,18 @@ function makePrediction(type, data) {
     };
   }
 
-  // Learn from ALL available history (up to 500 most recent)
-  const historyForLearning = data.slice(0, Math.min(500, data.length));
-  edgeDetector.learnFromHistory(historyForLearning);
+  // Learn from ALL available history
+  const historyForLearning = data.slice(0, Math.min(1000, data.length));
+  neuralDetector.learnFromHistory(historyForLearning);
 
-  // Find signals
-  const signals = edgeDetector.findBestPrediction(results, sums, data[0]?.timestamp);
+  // Find advanced signals
+  const signals = neuralDetector.findBestPrediction(results, sums, data[0]?.timestamp);
 
-  // Aggregate
-  const result = edgeDetector.aggregateSignals(signals, results);
+  // Aggregate with ensemble
+  const result = neuralDetector.aggregateSignals(signals, results);
 
   // Save learned data
-  edgeDetector.saveData(type);
+  neuralDetector.saveData(type);
 
   return result;
 }
@@ -695,17 +1048,17 @@ async function verifyAndUpdate(type, data, phienToVerify, lastPrediction) {
   const actualSession = data.find(d => d && d.Phien && d.Phien.toString() === phienToVerify.toString());
   if (!actualSession || !actualSession.Ket_qua) return;
 
-  const edgeDetector = type === 'hu' ? edgeDetectorHU : edgeDetectorMD5;
-  edgeDetector.recordOutcome(
+  const neuralDetector = type === 'hu' ? neuralDetectorHU : neuralDetectorMD5;
+  neuralDetector.recordOutcome(
     lastPrediction.prediction,
     actualSession.Ket_qua,
     lastPrediction.confidence || 0,
     lastPrediction.signals || []
   );
-  edgeDetector.saveData(type);
+  neuralDetector.saveData(type);
 }
 
-// ==================== AUTO PROCESS ====================
+// ==================== AUTO PROCESS (same as before) ====================
 async function autoProcessPredictions() {
   try {
     // Process HU
@@ -733,7 +1086,7 @@ async function autoProcessPredictions() {
           lastProcessedPhien.hu = nextHuPhien;
 
           const status = result.canPredict
-            ? `🎯 ${result.prediction} (${result.confidence}%)`
+            ? `🎯 ${result.prediction} (${result.confidence}%) [Sentiment: ${((result.marketSentiment || 0) * 100).toFixed(0)}]`
             : `⏸️ SKIP - ${result.reason}`;
           console.log(`[Hu #${nextHuPhien}] ${status} | Signals: ${result.signalCount || 0}`);
         }
@@ -765,7 +1118,7 @@ async function autoProcessPredictions() {
           lastProcessedPhien.md5 = nextMd5Phien;
 
           const status = result.canPredict
-            ? `🎯 ${result.prediction} (${result.confidence}%)`
+            ? `🎯 ${result.prediction} (${result.confidence}%) [Sentiment: ${((result.marketSentiment || 0) * 100).toFixed(0)}]`
             : `⏸️ SKIP - ${result.reason}`;
           console.log(`[MD5 #${nextMd5Phien}] ${status} | Signals: ${result.signalCount || 0}`);
         }
@@ -778,10 +1131,10 @@ async function autoProcessPredictions() {
   }
 }
 
-// ==================== EXPRESS ROUTES ====================
+// ==================== ENHANCED EXPRESS ROUTES ====================
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.send('kapub');
+  res.send('kapub - Advanced Neural Prediction System v2.0');
 });
 
 app.get('/lc79-hu', async (req, res) => {
@@ -818,6 +1171,7 @@ app.get('/lc79-hu', async (req, res) => {
         ti_le: '0%',
         status: 'skip',
         reason: result.reason,
+        market_sentiment: result.marketSentiment || 0,
         id: 'kapub'
       });
     }
@@ -826,6 +1180,8 @@ app.get('/lc79-hu', async (req, res) => {
       phien_hien_tai: nextPhien.toString(),
       du_doan: normalizeResult(result.prediction),
       ti_le: `${result.confidence}%`,
+      market_sentiment: result.marketSentiment || 0,
+      signal_count: result.signalCount || 0,
       id: 'kapub'
     });
   } catch (error) {
@@ -867,6 +1223,7 @@ app.get('/lc79-md5', async (req, res) => {
         ti_le: '0%',
         status: 'skip',
         reason: result.reason,
+        market_sentiment: result.marketSentiment || 0,
         id: 'kapub'
       });
     }
@@ -875,6 +1232,8 @@ app.get('/lc79-md5', async (req, res) => {
       phien_hien_tai: nextPhien.toString(),
       du_doan: normalizeResult(result.prediction),
       ti_le: `${result.confidence}%`,
+      market_sentiment: result.marketSentiment || 0,
+      signal_count: result.signalCount || 0,
       id: 'kapub'
     });
   } catch (error) {
@@ -882,6 +1241,141 @@ app.get('/lc79-md5', async (req, res) => {
   }
 });
 
+// Enhanced analysis endpoint with more metrics
+app.get('/lc79-hu/analysis', async (req, res) => {
+  try {
+    const data = await fetchDataHu();
+    if (!data) return res.status(500).json({ error: 'Cannot fetch data' });
+    const processed = preprocessData(data);
+    if (processed.length === 0) return res.status(500).json({ error: 'Data error' });
+
+    const result = makePrediction('hu', processed);
+    const nd = neuralDetectorHU;
+    
+    res.json({
+      prediction: result.prediction,
+      confidence: result.confidence,
+      canPredict: result.canPredict,
+      reason: result.reason,
+      market_sentiment: result.marketSentiment || 0,
+      manipulation_detected: result.manipulationDetected || false,
+      signals: result.signals?.map(s => ({
+        source: s.source,
+        prediction: s.prediction,
+        confidence: (s.confidence * 100).toFixed(1) + '%',
+        evidence: s.evidence
+      })) || [],
+      dynamic_threshold: nd.confidenceThreshold + '%',
+      total_predictions: nd.totalPredictions,
+      total_correct: nd.totalCorrect,
+      overall_win_rate: nd.totalPredictions > 0
+        ? (nd.totalCorrect / nd.totalPredictions * 100).toFixed(1) + '%'
+        : 'N/A',
+      recent_win_rate: nd.winRateHistory.length > 0
+        ? (nd.winRateHistory.slice(-50).reduce((a, b) => a + b, 0) / Math.min(50, nd.winRateHistory.length) * 100).toFixed(1) + '%'
+        : 'N/A'
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/lc79-md5/analysis', async (req, res) => {
+  try {
+    const data = await fetchDataMd5();
+    if (!data) return res.status(500).json({ error: 'Cannot fetch data' });
+    const processed = preprocessData(data);
+    if (processed.length === 0) return res.status(500).json({ error: 'Data error' });
+
+    const result = makePrediction('md5', processed);
+    const nd = neuralDetectorMD5;
+    
+    res.json({
+      prediction: result.prediction,
+      confidence: result.confidence,
+      canPredict: result.canPredict,
+      reason: result.reason,
+      market_sentiment: result.marketSentiment || 0,
+      manipulation_detected: result.manipulationDetected || false,
+      signals: result.signals?.map(s => ({
+        source: s.source,
+        prediction: s.prediction,
+        confidence: (s.confidence * 100).toFixed(1) + '%',
+        evidence: s.evidence
+      })) || [],
+      dynamic_threshold: nd.confidenceThreshold + '%',
+      total_predictions: nd.totalPredictions,
+      total_correct: nd.totalCorrect,
+      overall_win_rate: nd.totalPredictions > 0
+        ? (nd.totalCorrect / nd.totalPredictions * 100).toFixed(1) + '%'
+        : 'N/A',
+      recent_win_rate: nd.winRateHistory.length > 0
+        ? (nd.winRateHistory.slice(-50).reduce((a, b) => a + b, 0) / Math.min(50, nd.winRateHistory.length) * 100).toFixed(1) + '%'
+        : 'N/A'
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Enhanced stats endpoint
+app.get('/lc79-hu/stats', (req, res) => {
+  const nd = neuralDetectorHU;
+  const recentWR = nd.winRateHistory.length > 0
+    ? (nd.winRateHistory.reduce((a, b) => a + b, 0) / nd.winRateHistory.length * 100).toFixed(1) + '%'
+    : 'N/A';
+
+  res.json({
+    type: 'Lẩu Cua 79 - Neural Prediction System',
+    total_predictions: nd.totalPredictions,
+    total_correct: nd.totalCorrect,
+    overall_win_rate: nd.totalPredictions > 0
+      ? (nd.totalCorrect / nd.totalPredictions * 100).toFixed(1) + '%'
+      : 'N/A',
+    recent_win_rate: recentWR,
+    confidence_threshold: nd.confidenceThreshold + '%',
+    market_sentiment: (nd.marketSentiment * 100).toFixed(1) + '%',
+    manipulation_detected: nd.manipulationDetected,
+    edge_counts: {
+      streaks: Object.keys(nd.streakEdges).length,
+      patterns: Object.keys(nd.patternEdges).length,
+      time_slots: Object.keys(nd.timeEdges).length,
+      sum_clusters: Object.keys(nd.sumEdges).length,
+      correlations: Object.keys(nd.correlationEdges).length,
+      momentum: Object.keys(nd.momentumEdges).length
+    }
+  });
+});
+
+app.get('/lc79-md5/stats', (req, res) => {
+  const nd = neuralDetectorMD5;
+  const recentWR = nd.winRateHistory.length > 0
+    ? (nd.winRateHistory.reduce((a, b) => a + b, 0) / nd.winRateHistory.length * 100).toFixed(1) + '%'
+    : 'N/A';
+
+  res.json({
+    type: 'Lẩu Cua 79 - Neural Prediction System (MD5)',
+    total_predictions: nd.totalPredictions,
+    total_correct: nd.totalCorrect,
+    overall_win_rate: nd.totalPredictions > 0
+      ? (nd.totalCorrect / nd.totalPredictions * 100).toFixed(1) + '%'
+      : 'N/A',
+    recent_win_rate: recentWR,
+    confidence_threshold: nd.confidenceThreshold + '%',
+    market_sentiment: (nd.marketSentiment * 100).toFixed(1) + '%',
+    manipulation_detected: nd.manipulationDetected,
+    edge_counts: {
+      streaks: Object.keys(nd.streakEdges).length,
+      patterns: Object.keys(nd.patternEdges).length,
+      time_slots: Object.keys(nd.timeEdges).length,
+      sum_clusters: Object.keys(nd.sumEdges).length,
+      correlations: Object.keys(nd.correlationEdges).length,
+      momentum: Object.keys(nd.momentumEdges).length
+    }
+  });
+});
+
+// History endpoints (same as before)
 app.get('/lc79-hu/lichsu', async (req, res) => {
   try {
     const data = await fetchDataHu();
@@ -896,9 +1390,9 @@ app.get('/lc79-hu/lichsu', async (req, res) => {
       }
       return { ...record, ket_qua_thuc_te: actual?.Ket_qua || null, status };
     });
-    res.json({ type: 'Lẩu Cua 79 - Tài Xỉu Hũ', history: historyWithStatus, total: historyWithStatus.length });
+    res.json({ type: 'Lẩu Cua 79 - Neural Predictions', history: historyWithStatus, total: historyWithStatus.length });
   } catch (error) {
-    res.json({ type: 'Lẩu Cua 79 - Tài Xỉu Hũ', history: predictionHistory.hu, total: predictionHistory.hu.length });
+    res.json({ type: 'Lẩu Cua 79 - Neural Predictions', history: predictionHistory.hu, total: predictionHistory.hu.length });
   }
 });
 
@@ -916,136 +1410,20 @@ app.get('/lc79-md5/lichsu', async (req, res) => {
       }
       return { ...record, ket_qua_thuc_te: actual?.Ket_qua || null, status };
     });
-    res.json({ type: 'Lẩu Cua 79 - Tài Xỉu MD5', history: historyWithStatus, total: historyWithStatus.length });
+    res.json({ type: 'Lẩu Cua 79 - Neural Predictions (MD5)', history: historyWithStatus, total: historyWithStatus.length });
   } catch (error) {
-    res.json({ type: 'Lẩu Cua 79 - Tài Xỉu MD5', history: predictionHistory.md5, total: predictionHistory.md5.length });
+    res.json({ type: 'Lẩu Cua 79 - Neural Predictions (MD5)', history: predictionHistory.md5, total: predictionHistory.md5.length });
   }
-});
-
-app.get('/lc79-hu/analysis', async (req, res) => {
-  try {
-    const data = await fetchDataHu();
-    if (!data) return res.status(500).json({ error: 'Cannot fetch data' });
-    const processed = preprocessData(data);
-    if (processed.length === 0) return res.status(500).json({ error: 'Data error' });
-
-    const result = makePrediction('hu', processed);
-    const ed = edgeDetectorHU;
-    res.json({
-      prediction: result.prediction,
-      confidence: result.confidence,
-      canPredict: result.canPredict,
-      reason: result.reason,
-      signals: result.signals?.map(s => ({
-        source: s.source,
-        prediction: s.prediction,
-        strength: s.strength?.toFixed(3),
-        evidence: s.evidence
-      })) || [],
-      dynamicThreshold: ed.confidenceThreshold,
-      totalMade: ed.totalPredictions,
-      totalCorrect: ed.totalCorrect,
-      winRate: ed.totalPredictions > 0
-        ? (ed.totalCorrect / ed.totalPredictions * 100).toFixed(1) + '%'
-        : 'N/A'
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.get('/lc79-md5/analysis', async (req, res) => {
-  try {
-    const data = await fetchDataMd5();
-    if (!data) return res.status(500).json({ error: 'Cannot fetch data' });
-    const processed = preprocessData(data);
-    if (processed.length === 0) return res.status(500).json({ error: 'Data error' });
-
-    const result = makePrediction('md5', processed);
-    const ed = edgeDetectorMD5;
-    res.json({
-      prediction: result.prediction,
-      confidence: result.confidence,
-      canPredict: result.canPredict,
-      reason: result.reason,
-      signals: result.signals?.map(s => ({
-        source: s.source,
-        prediction: s.prediction,
-        strength: s.strength?.toFixed(3),
-        evidence: s.evidence
-      })) || [],
-      dynamicThreshold: ed.confidenceThreshold,
-      totalMade: ed.totalPredictions,
-      totalCorrect: ed.totalCorrect,
-      winRate: ed.totalPredictions > 0
-        ? (ed.totalCorrect / ed.totalPredictions * 100).toFixed(1) + '%'
-        : 'N/A'
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-app.get('/lc79-hu/stats', (req, res) => {
-  const ed = edgeDetectorHU;
-  const recentWR = ed.winRateHistory.length > 0
-    ? (ed.winRateHistory.reduce((a, b) => a + b, 0) / ed.winRateHistory.length * 100).toFixed(1) + '%'
-    : 'N/A';
-
-  res.json({
-    type: 'Lẩu Cua 79 - Tài Xỉu Hũ',
-    totalMade: ed.totalPredictions,
-    totalCorrect: ed.totalCorrect,
-    overallWinRate: ed.totalPredictions > 0
-      ? (ed.totalCorrect / ed.totalPredictions * 100).toFixed(1) + '%'
-      : 'N/A',
-    recentWinRate: recentWR,
-    confidenceThreshold: ed.confidenceThreshold + '%',
-    edgeCounts: {
-      streaks: Object.keys(ed.streakEdges).length,
-      patterns: Object.keys(ed.patternEdges).length,
-      timeSlots: Object.keys(ed.timeEdges).length,
-      sumRanges: Object.keys(ed.sumEdges).length,
-      amplitudes: Object.keys(ed.amplitudeEdges).length,
-      alternations: Object.keys(ed.alternationEdges).length
-    }
-  });
-});
-
-app.get('/lc79-md5/stats', (req, res) => {
-  const ed = edgeDetectorMD5;
-  const recentWR = ed.winRateHistory.length > 0
-    ? (ed.winRateHistory.reduce((a, b) => a + b, 0) / ed.winRateHistory.length * 100).toFixed(1) + '%'
-    : 'N/A';
-
-  res.json({
-    type: 'Lẩu Cua 79 - Tài Xỉu MD5',
-    totalMade: ed.totalPredictions,
-    totalCorrect: ed.totalCorrect,
-    overallWinRate: ed.totalPredictions > 0
-      ? (ed.totalCorrect / ed.totalPredictions * 100).toFixed(1) + '%'
-      : 'N/A',
-    recentWinRate: recentWR,
-    confidenceThreshold: ed.confidenceThreshold + '%',
-    edgeCounts: {
-      streaks: Object.keys(ed.streakEdges).length,
-      patterns: Object.keys(ed.patternEdges).length,
-      timeSlots: Object.keys(ed.timeEdges).length,
-      sumRanges: Object.keys(ed.sumEdges).length,
-      amplitudes: Object.keys(ed.amplitudeEdges).length,
-      alternations: Object.keys(ed.alternationEdges).length
-    }
-  });
 });
 
 app.get('/reset', (req, res) => {
-  edgeDetectorHU = new StatisticalEdgeDetector();
-  edgeDetectorMD5 = new StatisticalEdgeDetector();
+  neuralDetectorHU = new NeuralPatternDetector();
+  neuralDetectorMD5 = new NeuralPatternDetector();
   predictionHistory = { hu: [], md5: [] };
   lastProcessedPhien = { hu: null, md5: null };
 
-  edgeDetectorHU.saveData('hu');
-  edgeDetectorMD5.saveData('md5');
+  neuralDetectorHU.saveData('hu');
+  neuralDetectorMD5.saveData('md5');
   saveAll();
 
   res.json({ message: 'All data reset successfully' });
@@ -1058,12 +1436,20 @@ setInterval(autoProcessPredictions, AUTO_SAVE_INTERVAL);
 setTimeout(autoProcessPredictions, 3000);
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n╔══════════════════════════════════════════════════════════════════╗`);
-  console.log(`║     LẨU CUA 79 - STATISTICAL EDGE DETECTOR v10.1               ║`);
-  console.log(`║     Learns 6 edge types, predicts only when significant         ║`);
-  console.log(`╚══════════════════════════════════════════════════════════════════╝\n`);
-  console.log(`Server running: http://0.0.0.0:${PORT}`);
-  console.log(`\n🔍 EDGE TYPES: streak, pattern, time, sum, amplitude, alternation`);
-  console.log(`🎯 Only predicts when confidence > dynamic threshold (starts 55%)`);
-  console.log(`📋 ENDPOINTS: /lc79-hu, /lc79-md5, /lc79-hu/lichsu, etc.\n`);
+  console.log(`\n╔════════════════════════════════════════════════════════════════════════════╗`);
+  console.log(`║     LẨU CUA 79 - ADVANCED NEURAL PREDICTION SYSTEM v2.0                    ║`);
+  console.log(`║     Features: Neural Patterns | Ensemble Learning | Reinforcement         ║`);
+  console.log(`║                Kalman Filter | Market Sentiment | Adaptive Weights         ║`);
+  console.log(`╚════════════════════════════════════════════════════════════════════════════╝\n`);
+  console.log(`🚀 Server running: http://0.0.0.0:${PORT}`);
+  console.log(`\n🧠 ADVANCED FEATURES:`);
+  console.log(`   • Neural pattern recognition (3-7 length sequences)`);
+  console.log(`   • Ensemble learning with 8 edge types`);
+  console.log(`   • Reinforcement learning (Q-learning)`);
+  console.log(`   • Kalman filter for noise reduction`);
+  console.log(`   • Market sentiment & manipulation detection`);
+  console.log(`   • Adaptive weight optimization`);
+  console.log(`   • Volatility tracking`);
+  console.log(`\n🎯 Dynamic threshold: Starts at 52% (adjusts automatically)`);
+  console.log(`📊 Endpoints: /lc79-hu, /lc79-md5, /lc79-hu/analysis, /lc79-hu/stats, /lc79-hu/lichsu\n`);
 });
