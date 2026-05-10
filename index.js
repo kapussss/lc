@@ -175,8 +175,8 @@ class PredictionEngine {
     return null;
   }
 
-  // Weighted moving average prediction
-  getWeightedMABy prediction() {
+  // Weighted moving average prediction (FIXED METHOD NAME)
+  getWeightedMAPrediction() {
     if (this.results.length < 15) return null;
     
     let weightedSum = 0;
@@ -246,7 +246,7 @@ class PredictionEngine {
     const momentumPred = momentum > 0.2 ? 'Tài' : (momentum < -0.2 ? 'Xỉu' : null);
     if (momentumPred) predictions.push({ pred: momentumPred, weight: 0.9, source: 'momentum' });
     
-    const wmaPred = this.getWeightedMABy prediction();
+    const wmaPred = this.getWeightedMAPrediction();
     if (wmaPred) predictions.push({ pred: wmaPred, weight: 1.1, source: 'wma' });
     
     const sumPred = this.analyzeSumPattern();
