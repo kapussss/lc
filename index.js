@@ -75,6 +75,7 @@ let predictionHistory = { hu: [], md5: [] };
 let lastProcessedPhien = { hu: null, md5: null };
 let outcomeHistory = { hu: [], md5: [] };
 let apiCache = { hu: { at: 0, data: null }, md5: { at: 0, data: null } };
+let coldRateCache = { hu: null, md5: null };
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -224,6 +225,28 @@ function preprocessData(rawData) {
     }));
 }
 
+function mergeOutcomeHistory(type, liveData) {
+  if (!Array.isArray(liveData) || liveData.length === 0) return outcomeHistory[type] || [];
+
+  const byPhien = new Map();
+  for (const row of outcomeHistory[type] || []) {
+    byPhien.set(String(row.Phien), row);
+  }
+  for (const row of liveData) {
+    byPhien.set(String(row.Phien), row);
+  }
+
+  outcomeHistory[type] = Array.from(byPhien.values())
+    .sort((a, b) => b.Phien - a.Phien)
+    .slice(0, CONFIG.MAX_OUTCOME_HISTORY);
+
+  return outcomeHistory[type];
+}
+
+function getDataTape(type, liveData = []) {
+  return mergeOutcomeHistory(type, liveData);
+}
+
 async function fetchApi(type, force = false) {
   const cached = apiCache[type];
   if (!force && cached.data && Date.now() - cached.at < 4000) return cached.data;
@@ -233,6 +256,7 @@ async function fetchApi(type, force = false) {
     const response = await axios.get(url, { timeout: CONFIG.FETCH_TIMEOUT });
     const data = preprocessData(transformApiData(response.data));
     if (data && data.length > 0) {
+      mergeOutcomeHistory(type, data);
       apiCache[type] = { at: Date.now(), data };
       return data;
     }
@@ -285,19 +309,29 @@ function makeSignal(method, pTai, baseWeight, details = {}) {
   };
 }
 
-function methodRate(type, method) {
+function methodRate(type, method, coldRatesOverride = null) {
   const stats = learningData[type].methodPerformance[method];
-  if (!stats) return { rate: 0.5, total: 0, recentRate: 0.5 };
+  const coldRates = coldRatesOverride || getColdMethodRates(type);
+  const cold = coldRates[method];
+  if (!stats && !cold) return { rate: 0.5, total: 0, recentRate: 0.5 };
+  if (!stats && cold) {
+    const coldRate = betaProbability(cold.correct, cold.total, CONFIG.METHOD_PRIOR);
+    return { rate: coldRate, total: cold.total, recentRate: coldRate };
+  }
 
   const longRate = betaProbability(stats.correct, stats.total, CONFIG.METHOD_PRIOR);
   const recentRate = stats.recent.length >= 12 ? mean(stats.recent, longRate) : longRate;
-  const rate = longRate * 0.45 + recentRate * 0.55;
+  const liveRate = longRate * 0.45 + recentRate * 0.55;
+  const coldRate = cold ? betaProbability(cold.correct, cold.total, CONFIG.METHOD_PRIOR) : 0.5;
+  const liveTrust = clamp(stats.total / 80, 0, 1);
+  const rate = cold ? liveRate * liveTrust + coldRate * (1 - liveTrust) : liveRate;
+  const total = stats.total + (cold ? Math.min(cold.total, 120) : 0);
 
-  return { rate, total: stats.total, recentRate };
+  return { rate, total, recentRate };
 }
 
-function reliabilityWeight(type, signal) {
-  const { rate, total } = methodRate(type, signal.method);
+function reliabilityWeight(type, signal, coldRatesOverride = null) {
+  const { rate, total } = methodRate(type, signal.method, coldRatesOverride);
   const sampleTrust = clamp(Math.sqrt(total / 180), 0, 1);
   const learnedEdge = rate - 0.5;
   const signalEdge = Math.abs(signal.pTai - 0.5);
@@ -305,7 +339,7 @@ function reliabilityWeight(type, signal) {
   let pTai = signal.pTai;
   let weight = signal.baseWeight * (0.25 + signalEdge * 8);
 
-  if (total >= 60 && learnedEdge < -0.035) {
+  if (total >= 30 && learnedEdge < -0.035) {
     pTai = 1 - pTai;
     weight *= 0.55 + sampleTrust * 0.25;
   } else if (total >= 30) {
@@ -463,6 +497,82 @@ function predictSimilarity(data) {
   });
 }
 
+function predictModulo(data, nextPhien) {
+  if (!Number.isFinite(nextPhien) || data.length < 90) return null;
+
+  let best = null;
+  for (let mod = 3; mod <= 96; mod++) {
+    const bucket = nextPhien % mod;
+    let tai = 0;
+    let total = 0;
+
+    for (const row of data) {
+      if (row.Phien % mod !== bucket) continue;
+      total++;
+      if (row.Ket_qua === 'Tài') tai++;
+    }
+
+    if (total < Math.max(12, Math.ceil(data.length / mod * 0.55))) continue;
+
+    const pTai = betaProbability(tai, total, 16);
+    const edge = Math.abs(pTai - 0.5);
+    const support = clamp(Math.log(total) / Math.log(90), 0, 1);
+    const score = edge * support;
+
+    if (!best || score > best.score) {
+      best = { mod, bucket, tai, total, pTai, score };
+    }
+  }
+
+  if (!best || best.score < 0.018) return null;
+
+  return makeSignal('modulo', best.pTai, 0.75, {
+    mod: best.mod,
+    bucket: best.bucket,
+    tai: best.tai,
+    total: best.total,
+    score: Number(best.score.toFixed(4))
+  });
+}
+
+function predictShape(data) {
+  if (data.length < 80) return null;
+
+  const latest = data[0];
+  const sums = data.map(row => row.Tong);
+  const results = data.map(row => row.Ket_qua);
+  const recentSumBand = latest.Tong <= 8 ? 'low' : (latest.Tong >= 13 ? 'high' : 'mid');
+  const streak = currentStreak(results);
+  const targetKey = `${latest.Ket_qua}|${recentSumBand}|${Math.min(streak.length, 5)}`;
+  let tai = 0;
+  let total = 0;
+
+  for (let i = 1; i < data.length - 1; i++) {
+    const row = data[i];
+    const band = row.Tong <= 8 ? 'low' : (row.Tong >= 13 ? 'high' : 'mid');
+    const slice = results.slice(i);
+    const localStreak = currentStreak(slice);
+    const key = `${row.Ket_qua}|${band}|${Math.min(localStreak.length, 5)}`;
+
+    if (key !== targetKey) continue;
+    total++;
+    if (data[i - 1].Ket_qua === 'Tài') tai++;
+  }
+
+  if (total < 10) return null;
+
+  const pTai = betaProbability(tai, total, 10);
+  if (Math.abs(pTai - 0.5) < 0.035) return null;
+
+  return makeSignal('shape', pTai, 0.55, {
+    key: targetKey,
+    tai,
+    total,
+    lastSum: latest.Tong,
+    avg12: Number(mean(sums.slice(0, 12), 10.5).toFixed(2))
+  });
+}
+
 function predictDice(sums) {
   if (sums.length < 18) return null;
 
@@ -504,18 +614,57 @@ function predictTimeWindow(type, now = new Date()) {
   });
 }
 
-function calculatePrediction(data, type) {
+function getRawSignals(data, type, nextPhien = null) {
   const results = data.slice(0, 60).map(row => row.Ket_qua);
   const sums = data.slice(0, 60).map(row => row.Tong);
-  const rawSignals = [
+  return [
     predictSimple(results, type),
     predictMarkov(data),
     predictSimilarity(data),
+    predictModulo(data, nextPhien || (data[0]?.Phien + 1)),
+    predictShape(data),
     predictDice(sums),
     predictTimeWindow(type)
   ].filter(Boolean);
+}
 
-  const signals = rawSignals.map(signal => reliabilityWeight(type, signal));
+function estimateColdMethodRatesFromData(type, data, maxRounds = 180) {
+  const methodStats = {};
+  if (!Array.isArray(data) || data.length < CONFIG.PATTERN_WINDOW + 30) return methodStats;
+
+  let tested = 0;
+  for (let i = data.length - CONFIG.PATTERN_WINDOW - 1; i >= 1; i--) {
+    if (tested >= maxRounds) break;
+    const train = data.slice(i);
+    const actual = data[i - 1];
+    if (!actual || actual.Phien !== data[i].Phien + 1) continue;
+
+    const rawSignals = getRawSignals(train, type, actual.Phien);
+    for (const signal of rawSignals) {
+      methodStats[signal.method] = methodStats[signal.method] || { correct: 0, total: 0 };
+      methodStats[signal.method].total++;
+      if (signal.prediction === actual.Ket_qua) methodStats[signal.method].correct++;
+    }
+    tested++;
+  }
+
+  return Object.fromEntries(Object.entries(methodStats).filter(([, stats]) => stats.total >= 12));
+}
+
+function getColdMethodRates(type) {
+  const data = outcomeHistory[type] || [];
+  const key = `${data.length}:${data[0]?.Phien || 0}:${data[data.length - 1]?.Phien || 0}`;
+  if (coldRateCache[type]?.key === key) return coldRateCache[type].rates;
+
+  const rates = estimateColdMethodRatesFromData(type, data);
+  coldRateCache[type] = { key, rates };
+  return rates;
+}
+
+function calculatePrediction(data, type, nextPhien = null, options = {}) {
+  const rawSignals = getRawSignals(data, type, nextPhien);
+
+  const signals = rawSignals.map(signal => reliabilityWeight(type, signal, options.coldRates || null));
   const neutralWeight = 1.1;
   let weightedTai = neutralWeight * 0.5;
   let totalWeight = neutralWeight;
@@ -690,7 +839,8 @@ async function verifyPredictions(type, currentData) {
 }
 
 async function getOrCreatePrediction(type, data) {
-  await verifyPredictions(type, data);
+  const tape = getDataTape(type, data);
+  await verifyPredictions(type, tape);
 
   const latestPhien = data[0].Phien;
   const nextPhien = latestPhien + 1;
@@ -705,7 +855,7 @@ async function getOrCreatePrediction(type, data) {
     };
   }
 
-  const result = calculatePrediction(data, type);
+  const result = calculatePrediction(tape, type, nextPhien);
   const record = recordPrediction(type, nextPhien, result);
   upsertHistory(type, nextPhien, record);
   lastProcessedPhien[type] = nextPhien;
@@ -722,7 +872,8 @@ async function autoProcessType(type) {
   const data = await fetchApi(type, true);
   if (!data || data.length === 0) return;
 
-  await verifyPredictions(type, data);
+  const tape = getDataTape(type, data);
+  await verifyPredictions(type, tape);
   const latestPhien = data[0].Phien;
   const nextPhien = latestPhien + 1;
 
@@ -773,6 +924,18 @@ function methodPerformance(type) {
   return output;
 }
 
+function coldStartPerformance(type) {
+  const rates = getColdMethodRates(type);
+  return Object.fromEntries(Object.entries(rates).map(([method, stats]) => [
+    method,
+    {
+      accuracy: `${(stats.correct / stats.total * 100).toFixed(2)}%`,
+      total: stats.total,
+      correct: stats.correct
+    }
+  ]));
+}
+
 function statsPayload(type) {
   recalculateTotals(type);
   const stats = learningData[type];
@@ -796,12 +959,97 @@ function statsPayload(type) {
     actionablePredictions: actionable.length,
     actionableCorrect,
     actionableAccuracy: `${actionableAcc.toFixed(2)}%`,
+    outcomeHistory: (outcomeHistory[type] || []).length,
     recentAccuracy: `${recentAcc.toFixed(2)}%`,
     streakAnalysis: stats.streakAnalysis,
     methodPerformance: methodPerformance(type),
+    coldStartMethodPerformance: coldStartPerformance(type),
     mistakedPatterns: Object.keys(stats.mistakePatterns || {}).length,
     lastUpdate: stats.lastUpdate,
     note: 'Accuracy is calculated from verified unique rounds only; duplicate calls do not inflate totals.'
+  };
+}
+
+function backtestPayload(type, maxRounds = 300) {
+  const data = (outcomeHistory[type] || []).slice();
+  if (data.length < CONFIG.PATTERN_WINDOW + 40) {
+    return {
+      type,
+      error: 'Not enough stored outcome history yet',
+      outcomeHistory: data.length,
+      minimumRecommended: CONFIG.PATTERN_WINDOW + 40
+    };
+  }
+
+  const methodStats = {};
+  let total = 0;
+  let correct = 0;
+  let actionableTotal = 0;
+  let actionableCorrect = 0;
+  const rows = [];
+  const newestBacktestIndex = 1;
+  const oldestBacktestIndex = Math.max(
+    newestBacktestIndex,
+    data.length - CONFIG.PATTERN_WINDOW - Math.max(40, maxRounds)
+  );
+
+  for (let i = data.length - CONFIG.PATTERN_WINDOW - 1; i >= newestBacktestIndex; i--) {
+    if (total >= maxRounds) break;
+    if (i < oldestBacktestIndex) break;
+
+    const train = data.slice(i);
+    const actual = data[i - 1];
+    if (!actual || actual.Phien !== data[i].Phien + 1) continue;
+
+    const coldRates = estimateColdMethodRatesFromData(type, train);
+    const result = calculatePrediction(train, type, actual.Phien, { coldRates });
+    const isCorrect = result.prediction === actual.Ket_qua;
+    total++;
+    if (isCorrect) correct++;
+    if (result.action === 'predict') {
+      actionableTotal++;
+      if (isCorrect) actionableCorrect++;
+    }
+
+    for (const signal of result.signals) {
+      methodStats[signal.method] = methodStats[signal.method] || { correct: 0, total: 0 };
+      methodStats[signal.method].total++;
+      if (signal.prediction === actual.Ket_qua) methodStats[signal.method].correct++;
+    }
+
+    if (rows.length < 25) {
+      rows.push({
+        phien: actual.Phien,
+        prediction: normalizeResult(result.prediction),
+        actual: normalizeResult(actual.Ket_qua),
+        confidence: result.confidence,
+        edge: result.edge,
+        action: result.action,
+        correct: isCorrect
+      });
+    }
+  }
+
+  const methodPerformance = Object.fromEntries(Object.entries(methodStats).map(([method, stats]) => [
+    method,
+    {
+      accuracy: `${(stats.correct / stats.total * 100).toFixed(2)}%`,
+      total: stats.total,
+      correct: stats.correct
+    }
+  ]));
+
+  return {
+    type: type === 'hu' ? 'Lẩu Cua 79 - Tài Xỉu Hũ' : 'Lẩu Cua 79 - Tài Xỉu MD5',
+    outcomeHistory: data.length,
+    tested: total,
+    correct,
+    accuracy: total > 0 ? `${(correct / total * 100).toFixed(2)}%` : '0.00%',
+    actionableTested: actionableTotal,
+    actionableCorrect,
+    actionableAccuracy: actionableTotal > 0 ? `${(actionableCorrect / actionableTotal * 100).toFixed(2)}%` : '0.00%',
+    methodPerformance,
+    sample: rows
   };
 }
 
@@ -819,7 +1067,7 @@ async function predictionRoute(type, res) {
 async function historyRoute(type, res) {
   const data = await fetchApi(type, true);
   if (data && data.length > 0) {
-    await verifyPredictions(type, data);
+    await verifyPredictions(type, getDataTape(type, data));
     saveState();
   }
 
@@ -846,8 +1094,9 @@ async function analysisRoute(type, res) {
     return;
   }
 
-  await verifyPredictions(type, data);
-  const result = calculatePrediction(data, type);
+  const tape = getDataTape(type, data);
+  await verifyPredictions(type, tape);
+  const result = calculatePrediction(tape, type, data[0].Phien + 1);
 
   res.json({
     prediction: normalizeResult(result.prediction),
@@ -868,6 +1117,24 @@ async function analysisRoute(type, res) {
   });
 }
 
+async function collectRoute(type, res) {
+  const data = await fetchApi(type, true);
+  if (!data || data.length === 0) {
+    res.status(502).json({ error: 'Cannot fetch data' });
+    return;
+  }
+
+  const tape = getDataTape(type, data);
+  saveState();
+  res.json({
+    type,
+    fetched: data.length,
+    outcomeHistory: tape.length,
+    newestPhien: tape[0]?.Phien || null,
+    oldestPhien: tape[tape.length - 1]?.Phien || null
+  });
+}
+
 function resetState() {
   learningData = {
     hu: emptyLearningBucket(),
@@ -875,7 +1142,9 @@ function resetState() {
   };
   predictionHistory = { hu: [], md5: [] };
   lastProcessedPhien = { hu: null, md5: null };
+  outcomeHistory = { hu: [], md5: [] };
   apiCache = { hu: { at: 0, data: null }, md5: { at: 0, data: null } };
+  coldRateCache = { hu: null, md5: null };
   saveState();
 }
 
@@ -885,6 +1154,7 @@ function cleanupOldData() {
   for (const type of ['hu', 'md5']) {
     learningData[type].predictions = learningData[type].predictions.slice(0, CONFIG.MAX_PREDICTIONS);
     learningData[type].recentAccuracy = learningData[type].recentAccuracy.slice(-300);
+    outcomeHistory[type] = (outcomeHistory[type] || []).slice(0, CONFIG.MAX_OUTCOME_HISTORY);
     predictionHistory[type] = predictionHistory[type].slice(0, CONFIG.MAX_HISTORY);
 
     for (const [pattern, info] of Object.entries(learningData[type].mistakePatterns || {})) {
@@ -912,6 +1182,10 @@ app.get('/lc79-hu/analysis', (req, res) => analysisRoute('hu', res));
 app.get('/lc79-md5/analysis', (req, res) => analysisRoute('md5', res));
 app.get('/lc79-hu/stats', (req, res) => res.json(statsPayload('hu')));
 app.get('/lc79-md5/stats', (req, res) => res.json(statsPayload('md5')));
+app.get('/lc79-hu/backtest', (req, res) => res.json(backtestPayload('hu', Number(req.query.limit || 300))));
+app.get('/lc79-md5/backtest', (req, res) => res.json(backtestPayload('md5', Number(req.query.limit || 300))));
+app.get('/lc79-hu/collect', (req, res) => collectRoute('hu', res));
+app.get('/lc79-md5/collect', (req, res) => collectRoute('md5', res));
 
 app.get('/reset', (req, res) => {
   resetState();
