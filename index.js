@@ -37,11 +37,18 @@ function emptyMethodStats() {
   return {
     simple: { correct: 0, total: 0, recent: [] },
     markov: { correct: 0, total: 0, recent: [] },
+    ngram: { correct: 0, total: 0, recent: [] },
     similarity: { correct: 0, total: 0, recent: [] },
     modulo: { correct: 0, total: 0, recent: [] },
+    phaseMarkov: { correct: 0, total: 0, recent: [] },
+    bayes: { correct: 0, total: 0, recent: [] },
+    streakTable: { correct: 0, total: 0, recent: [] },
     shape: { correct: 0, total: 0, recent: [] },
     dice: { correct: 0, total: 0, recent: [] },
     timeWindow: { correct: 0, total: 0, recent: [] },
+    metaFlip: { correct: 0, total: 0, recent: [] },
+    leader: { correct: 0, total: 0, recent: [] },
+    strategy: { correct: 0, total: 0, recent: [] },
     ensemble: { correct: 0, total: 0, recent: [] }
   };
 }
@@ -98,6 +105,22 @@ function denormalizeResult(result) {
 
 function opposite(result) {
   return result === 'Tài' ? 'Xỉu' : 'Tài';
+}
+
+function isTai(result) {
+  return normalizeResult(result) === 'tai';
+}
+
+function sumBand(sum) {
+  if (sum <= 7) return 'very_low';
+  if (sum <= 9) return 'low';
+  if (sum <= 12) return 'mid';
+  if (sum <= 14) return 'high';
+  return 'very_high';
+}
+
+function rowSymbol(row) {
+  return `${normalizeResult(row.Ket_qua)}:${sumBand(row.Tong)}:${Number(row.Tong) % 2}`;
 }
 
 function safeJsonRead(file, fallback) {
@@ -351,6 +374,8 @@ function reliabilityWeight(type, signal, coldRatesOverride = null) {
     pTai,
     prediction: pTai >= 0.5 ? 'Tài' : 'Xỉu',
     learnedRate: rate,
+    learnedTotal: total,
+    effectiveRate: rate < 0.5 ? 1 - rate : rate,
     effectiveWeight: clamp(weight, 0.01, 2.5)
   };
 }
@@ -425,6 +450,175 @@ function predictMarkov(data) {
 
   return makeSignal('markov', weighted.tai / weighted.weight, 0.85, {
     matches: candidates.map(c => ({ size: c.size, total: c.total, tai: c.tai }))
+  });
+}
+
+function predictNgram(data) {
+  if (data.length < 70) return null;
+
+  const candidates = [];
+  const specs = [];
+  for (let size = 2; size <= 10; size++) specs.push({ size, kind: 'result' });
+  for (let size = 2; size <= 6; size++) specs.push({ size, kind: 'symbol' });
+
+  for (const spec of specs) {
+    const mapper = spec.kind === 'result'
+      ? row => normalizeResult(row.Ket_qua)
+      : row => rowSymbol(row);
+    const current = data.slice(0, spec.size).map(mapper).join('|');
+    let taiWeight = 0;
+    let totalWeight = 0;
+    let total = 0;
+
+    for (let i = 1; i <= data.length - spec.size; i++) {
+      const pattern = data.slice(i, i + spec.size).map(mapper).join('|');
+      if (pattern !== current) continue;
+
+      const recencyWeight = 1 + Math.exp(-i / Math.max(data.length * 0.25, 1));
+      total++;
+      totalWeight += recencyWeight;
+      if (isTai(data[i - 1].Ket_qua)) taiWeight += recencyWeight;
+    }
+
+    if (total < (spec.kind === 'result' ? 4 : 3)) continue;
+
+    const pTai = betaProbability(taiWeight, totalWeight, spec.kind === 'result' ? 8 : 10);
+    const edge = Math.abs(pTai - 0.5);
+    const score = edge * Math.log2(total + 1) * (1 + spec.size / 10);
+    candidates.push({ ...spec, total, pTai, score });
+  }
+
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => b.score - a.score);
+  const top = candidates.slice(0, 5);
+  let weightedTai = 0;
+  let totalWeight = 0;
+
+  for (const item of top) {
+    const weight = Math.max(0.05, item.score);
+    weightedTai += item.pTai * weight;
+    totalWeight += weight;
+  }
+
+  const pTai = weightedTai / totalWeight;
+  if (Math.abs(pTai - 0.5) < 0.025) return null;
+
+  return makeSignal('ngram', pTai, 1.05, {
+    top: top.map(item => ({
+      kind: item.kind,
+      size: item.size,
+      total: item.total,
+      pTai: Number(item.pTai.toFixed(4)),
+      score: Number(item.score.toFixed(4))
+    }))
+  });
+}
+
+function predictStreakTable(data) {
+  if (data.length < 60) return null;
+
+  const results = data.map(row => row.Ket_qua);
+  const current = currentStreak(results);
+  const currentKey = `${normalizeResult(current.value)}:${Math.min(current.length, 8)}`;
+  let tai = 0;
+  let total = 0;
+
+  for (let i = 1; i < data.length - 1; i++) {
+    const local = currentStreak(results.slice(i));
+    const key = `${normalizeResult(local.value)}:${Math.min(local.length, 8)}`;
+    if (key !== currentKey) continue;
+
+    total++;
+    if (isTai(data[i - 1].Ket_qua)) tai++;
+  }
+
+  if (total < 8) return null;
+
+  const pTai = betaProbability(tai, total, 12);
+  if (Math.abs(pTai - 0.5) < 0.03) return null;
+
+  return makeSignal('streakTable', pTai, 0.55, {
+    key: currentKey,
+    tai,
+    total
+  });
+}
+
+function stateFeatures(data, start, nextPhien) {
+  const window = data.slice(start, start + 20);
+  if (window.length < 6) return [];
+
+  const results = window.map(row => normalizeResult(row.Ket_qua));
+  const sums = window.map(row => row.Tong);
+  const streak = currentStreak(window.map(row => row.Ket_qua));
+  const avg5 = mean(sums.slice(0, 5), 10.5);
+  const avg12 = mean(sums.slice(0, 12), 10.5);
+  const last3 = results.slice(0, 3).join('');
+  const last5Tai = results.slice(0, 5).filter(result => result === 'tai').length;
+  const phien = Number(nextPhien);
+
+  return [
+    `r1:${results[0]}`,
+    `r2:${results.slice(0, 2).join('')}`,
+    `r3:${last3}`,
+    `streak:${normalizeResult(streak.value)}:${Math.min(streak.length, 6)}`,
+    `sum:${sumBand(sums[0])}`,
+    `sum2:${sumBand(sums[0])}:${sumBand(sums[1])}`,
+    `drift:${avg5 > avg12 + 0.6 ? 'up' : (avg5 < avg12 - 0.6 ? 'down' : 'flat')}`,
+    `bias5:${last5Tai}`,
+    Number.isFinite(phien) ? `m7:${phien % 7}` : null,
+    Number.isFinite(phien) ? `m13:${phien % 13}` : null,
+    Number.isFinite(phien) ? `m17:${phien % 17}` : null
+  ].filter(Boolean);
+}
+
+function predictBayes(data, nextPhien) {
+  if (data.length < 80) return null;
+
+  const targetFeatures = stateFeatures(data, 0, nextPhien || (data[0]?.Phien + 1));
+  const featureSet = new Set(targetFeatures);
+  const stats = {};
+
+  for (let i = 1; i < data.length - 10; i++) {
+    const actual = data[i - 1];
+    const features = stateFeatures(data, i, actual.Phien);
+    for (const feature of features) {
+      if (!featureSet.has(feature)) continue;
+      stats[feature] = stats[feature] || { tai: 0, total: 0 };
+      stats[feature].total++;
+      if (isTai(actual.Ket_qua)) stats[feature].tai++;
+    }
+  }
+
+  let weightedTai = 0;
+  let totalWeight = 0;
+  const used = [];
+
+  for (const [feature, item] of Object.entries(stats)) {
+    if (item.total < 8) continue;
+    const pTai = betaProbability(item.tai, item.total, 14);
+    const edge = Math.abs(pTai - 0.5);
+    if (edge < 0.025) continue;
+
+    const weight = edge * Math.min(2.5, Math.log2(item.total + 1));
+    weightedTai += pTai * weight;
+    totalWeight += weight;
+    used.push({ feature, total: item.total, pTai, weight });
+  }
+
+  if (totalWeight === 0) return null;
+
+  used.sort((a, b) => b.weight - a.weight);
+  const pTai = weightedTai / totalWeight;
+  if (Math.abs(pTai - 0.5) < 0.025) return null;
+
+  return makeSignal('bayes', pTai, 0.9, {
+    features: used.slice(0, 6).map(item => ({
+      feature: item.feature,
+      total: item.total,
+      pTai: Number(item.pTai.toFixed(4))
+    }))
   });
 }
 
@@ -535,6 +729,51 @@ function predictModulo(data, nextPhien) {
   });
 }
 
+function predictPhaseMarkov(data, nextPhien) {
+  if (!Number.isFinite(nextPhien) || data.length < 90) return null;
+
+  const latest = data[0];
+  const latestResult = normalizeResult(latest.Ket_qua);
+  const latestBand = sumBand(latest.Tong);
+  let best = null;
+
+  for (let mod = 4; mod <= 144; mod++) {
+    const targetKey = `${nextPhien % mod}|${latestResult}|${latestBand}`;
+    let tai = 0;
+    let total = 0;
+
+    for (let i = 1; i < data.length; i++) {
+      const prev = data[i];
+      const actual = data[i - 1];
+      const key = `${actual.Phien % mod}|${normalizeResult(prev.Ket_qua)}|${sumBand(prev.Tong)}`;
+      if (key !== targetKey) continue;
+
+      total++;
+      if (isTai(actual.Ket_qua)) tai++;
+    }
+
+    if (total < 5) continue;
+
+    const pTai = betaProbability(tai, total, 12);
+    const edge = Math.abs(pTai - 0.5);
+    const support = clamp(Math.log(total + 1) / Math.log(40), 0, 1);
+    const score = edge * support;
+
+    if (!best || score > best.score) {
+      best = { mod, tai, total, pTai, score };
+    }
+  }
+
+  if (!best || best.score < 0.02) return null;
+
+  return makeSignal('phaseMarkov', best.pTai, 0.8, {
+    mod: best.mod,
+    tai: best.tai,
+    total: best.total,
+    score: Number(best.score.toFixed(4))
+  });
+}
+
 function predictShape(data) {
   if (data.length < 80) return null;
 
@@ -620,20 +859,25 @@ function getRawSignals(data, type, nextPhien = null) {
   return [
     predictSimple(results, type),
     predictMarkov(data),
+    predictNgram(data),
     predictSimilarity(data),
     predictModulo(data, nextPhien || (data[0]?.Phien + 1)),
+    predictPhaseMarkov(data, nextPhien || (data[0]?.Phien + 1)),
+    predictBayes(data, nextPhien || (data[0]?.Phien + 1)),
+    predictStreakTable(data),
     predictShape(data),
     predictDice(sums),
     predictTimeWindow(type)
   ].filter(Boolean);
 }
 
-function estimateColdMethodRatesFromData(type, data, maxRounds = 180) {
+function estimateColdMethodRatesFromData(type, data, maxRounds = 60) {
   const methodStats = {};
   if (!Array.isArray(data) || data.length < CONFIG.PATTERN_WINDOW + 30) return methodStats;
 
   let tested = 0;
-  for (let i = data.length - CONFIG.PATTERN_WINDOW - 1; i >= 1; i--) {
+  const maxIndex = data.length - CONFIG.PATTERN_WINDOW - 1;
+  for (let i = 1; i <= maxIndex; i++) {
     if (tested >= maxRounds) break;
     const train = data.slice(i);
     const actual = data[i - 1];
@@ -690,6 +934,335 @@ function calculatePrediction(data, type, nextPhien = null, options = {}) {
     pXiu: Number((1 - pTai).toFixed(4)),
     edge: Number(edge.toFixed(4)),
     action,
+    signals
+  };
+}
+
+function combineSignals(type, rawSignals, options = {}) {
+  const signals = rawSignals.map(signal => reliabilityWeight(type, signal, options.coldRates || null));
+  const neutralWeight = 1.1;
+  let weightedTai = neutralWeight * 0.5;
+  let totalWeight = neutralWeight;
+
+  for (const signal of signals) {
+    weightedTai += signal.pTai * signal.effectiveWeight;
+    totalWeight += signal.effectiveWeight;
+  }
+
+  const elite = signals.filter(signal =>
+    signal.learnedTotal >= 24 &&
+    signal.effectiveRate >= 0.54 &&
+    Math.abs(signal.pTai - 0.5) >= 0.015
+  ).sort((a, b) => {
+    const aScore = (a.effectiveRate - 0.5) * Math.sqrt(a.learnedTotal) * (Math.abs(a.pTai - 0.5) + 0.02);
+    const bScore = (b.effectiveRate - 0.5) * Math.sqrt(b.learnedTotal) * (Math.abs(b.pTai - 0.5) + 0.02);
+    return bScore - aScore;
+  }).slice(0, 3);
+
+  if (elite.length > 0) {
+    let eliteTai = 0;
+    let eliteWeight = 0;
+    for (const signal of elite) {
+      const edge = Math.abs(signal.pTai - 0.5);
+      const weight = signal.effectiveWeight * (1 + edge * 6) * (1 + (signal.effectiveRate - 0.54) * 10);
+      eliteTai += signal.pTai * weight;
+      eliteWeight += weight;
+    }
+
+    const allProb = weightedTai / totalWeight;
+    const eliteProb = eliteTai / eliteWeight;
+    const eliteTrust = clamp(eliteWeight / (eliteWeight + 2.2), 0.42, 0.78);
+    return {
+      pTai: clamp(eliteProb * eliteTrust + allProb * (1 - eliteTrust), 0.32, 0.68),
+      signals
+    };
+  }
+
+  return {
+    pTai: clamp(weightedTai / totalWeight, 0.35, 0.65),
+    signals
+  };
+}
+
+function calculateBasePrediction(data, type, nextPhien = null, options = {}) {
+  const rawSignals = getRawSignals(data, type, nextPhien);
+  const combined = combineSignals(type, rawSignals, options);
+  const pTai = combined.pTai;
+  const prediction = pTai >= 0.5 ? 'Tài' : 'Xỉu';
+  const reliability = methodRate(type, 'ensemble', options.coldRates || null).rate;
+  const confidence = confidenceFromProbability(pTai, reliability);
+  const edge = Math.abs(pTai - 0.5);
+  const action = confidence >= CONFIG.MIN_ACTION_CONFIDENCE && edge >= CONFIG.MIN_ACTION_EDGE
+    ? 'predict'
+    : 'observe';
+
+  return {
+    prediction,
+    confidence,
+    pTai: Number(pTai.toFixed(4)),
+    pXiu: Number((1 - pTai).toFixed(4)),
+    edge: Number(edge.toFixed(4)),
+    action,
+    signals: combined.signals,
+    rawSignals
+  };
+}
+
+function selectRecentStrategy(type, data, maxRounds = 70) {
+  if (!Array.isArray(data) || data.length < CONFIG.PATTERN_WINDOW + 35) return null;
+
+  const stats = {};
+  const maxIndex = data.length - CONFIG.PATTERN_WINDOW - 1;
+  let tested = 0;
+
+  for (let i = 1; i <= maxIndex; i++) {
+    if (tested >= maxRounds) break;
+    const train = data.slice(i);
+    const actual = data[i - 1];
+    if (!actual || actual.Phien !== data[i].Phien + 1) continue;
+
+    const rawSignals = getRawSignals(train, type, actual.Phien);
+    for (const signal of rawSignals) {
+      stats[signal.method] = stats[signal.method] || { correct: 0, total: 0 };
+      stats[signal.method].total++;
+      if (signal.prediction === actual.Ket_qua) stats[signal.method].correct++;
+    }
+    tested++;
+  }
+
+  const priority = ['simple', 'dice', 'ngram', 'streakTable', 'shape'];
+  let best = null;
+  for (const method of priority) {
+    const item = stats[method];
+    if (!item) continue;
+    if (item.total < 18) continue;
+    const rawRate = item.correct / item.total;
+    const rate = betaProbability(item.correct, item.total, 8);
+    const score = (rate - 0.5) * Math.sqrt(item.total);
+
+    if (rate < (method === 'simple' ? 0.545 : 0.565)) continue;
+    if (!best || score > best.score) {
+      best = {
+        method,
+        mode: 'normal',
+        rate,
+        rawRate,
+        total: item.total,
+        score
+      };
+    }
+  }
+
+  return best;
+}
+
+function estimateMetaCalibration(type, data, coldRates = null, maxRounds = 70) {
+  if (!Array.isArray(data) || data.length < CONFIG.PATTERN_WINDOW + 35) {
+    return { mode: 'normal', total: 0, normalRate: 0.5, flipRate: 0.5 };
+  }
+
+  let total = 0;
+  let normalCorrect = 0;
+  let actionable = 0;
+  let actionableCorrect = 0;
+  const maxIndex = data.length - CONFIG.PATTERN_WINDOW - 1;
+
+  for (let i = 1; i <= maxIndex; i++) {
+    if (total >= maxRounds) break;
+    const train = data.slice(i);
+    const actual = data[i - 1];
+    if (!actual || actual.Phien !== data[i].Phien + 1) continue;
+
+    const base = calculateBasePrediction(train, type, actual.Phien, { coldRates });
+    if (base.signals.length < 2 || base.edge < 0.012) continue;
+
+    total++;
+    const isCorrect = base.prediction === actual.Ket_qua;
+    if (isCorrect) normalCorrect++;
+    if (base.action === 'predict') {
+      actionable++;
+      if (isCorrect) actionableCorrect++;
+    }
+  }
+
+  if (total < 18) {
+    return { mode: 'normal', total, normalRate: 0.5, flipRate: 0.5 };
+  }
+
+  const normalRate = normalCorrect / total;
+  const flipRate = 1 - normalRate;
+  const actionableRate = actionable > 0 ? actionableCorrect / actionable : normalRate;
+  let mode = 'normal';
+
+  if (flipRate >= 0.57 && flipRate - normalRate >= 0.08) {
+    mode = 'flip';
+  } else if (normalRate < 0.47 && actionableRate < 0.47) {
+    mode = 'observe';
+  }
+
+  return {
+    mode,
+    total,
+    normalRate,
+    flipRate,
+    actionable,
+    actionableRate
+  };
+}
+
+function calculatePrediction(data, type, nextPhien = null, options = {}) {
+  const coldRates = options.coldRates || null;
+  const base = calculateBasePrediction(data, type, nextPhien, { coldRates });
+  const meta = options.disableMeta
+    ? { mode: 'normal', total: 0, normalRate: 0.5, flipRate: 0.5 }
+    : estimateMetaCalibration(type, data, coldRates);
+
+  let pTai = base.pTai;
+  let prediction = base.prediction;
+  const signals = base.signals.slice();
+  const strategy = options.enableStrategy ? selectRecentStrategy(type, data) : null;
+
+  if (meta.mode === 'flip' && base.edge >= 0.015) {
+    pTai = clamp(1 - pTai, 0.35, 0.65);
+    prediction = pTai >= 0.5 ? 'Tài' : 'Xỉu';
+    signals.push({
+      method: 'metaFlip',
+      prediction,
+      pTai,
+      confidence: confidenceFromProbability(pTai, meta.flipRate),
+      baseWeight: 0.5,
+      effectiveWeight: 0.5,
+      learnedRate: meta.flipRate,
+      details: {
+        mode: meta.mode,
+        total: meta.total,
+        normalRate: Number(meta.normalRate.toFixed(4)),
+        flipRate: Number(meta.flipRate.toFixed(4))
+      }
+    });
+  }
+
+  const simpleBackbone = base.rawSignals.find(signal => signal.method === 'simple');
+  if (simpleBackbone) {
+    const simpleRateInfo = methodRate(type, 'simple', coldRates);
+    pTai = clamp(simpleBackbone.pTai, 0.34, 0.66);
+    prediction = pTai >= 0.5 ? 'Tài' : 'Xỉu';
+    signals.push({
+      method: 'leader',
+      prediction,
+      pTai,
+      confidence: confidenceFromProbability(pTai, Math.max(simpleRateInfo.rate, 0.54)),
+      baseWeight: 0.85,
+      effectiveWeight: 0.85,
+      learnedRate: simpleRateInfo.rate,
+      learnedTotal: simpleRateInfo.total,
+      effectiveRate: Math.max(simpleRateInfo.rate, 1 - simpleRateInfo.rate),
+      details: {
+        selectedMethod: 'simple_backbone',
+        total: simpleRateInfo.total,
+        rate: Number(simpleRateInfo.rate.toFixed(4)),
+        rawPrediction: simpleBackbone.prediction,
+        rawPTai: Number(simpleBackbone.pTai.toFixed(4))
+      }
+    });
+  }
+
+  const leaders = base.rawSignals
+    .map(signal => {
+      const rateInfo = methodRate(type, signal.method, coldRates);
+      return {
+        signal,
+        rate: rateInfo.rate,
+        total: rateInfo.total,
+        score: (rateInfo.rate - 0.5) * Math.sqrt(Math.max(rateInfo.total, 1)) * (Math.abs(signal.pTai - 0.5) + 0.02)
+      };
+    })
+    .filter(item =>
+      item.total >= 24 &&
+      item.rate >= 0.56 &&
+      Math.abs(item.signal.pTai - 0.5) >= 0.012
+    )
+    .sort((a, b) => b.score - a.score);
+
+  if (leaders.length > 0 && !simpleBackbone) {
+    const leader = leaders[0];
+    const leaderTrust = clamp((leader.rate - 0.535) * 7, 0.45, 0.88);
+    pTai = clamp(leader.signal.pTai * leaderTrust + pTai * (1 - leaderTrust), 0.32, 0.68);
+    prediction = pTai >= 0.5 ? 'Tài' : 'Xỉu';
+    signals.push({
+      method: 'leader',
+      prediction,
+      pTai,
+      confidence: confidenceFromProbability(pTai, leader.rate),
+      baseWeight: 0.9,
+      effectiveWeight: 0.9,
+      learnedRate: leader.rate,
+      learnedTotal: leader.total,
+      effectiveRate: leader.rate,
+      details: {
+        selectedMethod: leader.signal.method,
+        total: leader.total,
+        rate: Number(leader.rate.toFixed(4)),
+        rawPrediction: leader.signal.prediction,
+        rawPTai: Number(leader.signal.pTai.toFixed(4))
+      }
+    });
+  }
+
+  if (strategy) {
+    const rawSignal = base.rawSignals.find(signal => signal.method === strategy.method);
+    if (rawSignal) {
+      const strategyProb = strategy.mode === 'flip' ? 1 - rawSignal.pTai : rawSignal.pTai;
+      const strategyEdge = Math.abs(strategyProb - 0.5);
+      const strategyTrust = clamp((strategy.rate - 0.535) * 8, 0.35, 0.88);
+
+      if (strategyEdge >= 0.012) {
+        pTai = clamp(strategyProb * strategyTrust + pTai * (1 - strategyTrust), 0.32, 0.68);
+        prediction = pTai >= 0.5 ? 'Tài' : 'Xỉu';
+        signals.push({
+          method: 'strategy',
+          prediction,
+          pTai,
+          confidence: confidenceFromProbability(pTai, strategy.rate),
+          baseWeight: 0.75,
+          effectiveWeight: 0.75,
+          learnedRate: strategy.rate,
+          learnedTotal: strategy.total,
+          effectiveRate: strategy.rate,
+          details: {
+            selectedMethod: strategy.method,
+            mode: strategy.mode,
+            total: strategy.total,
+            rawRate: Number(strategy.rawRate.toFixed(4)),
+            rate: Number(strategy.rate.toFixed(4))
+          }
+        });
+      }
+    }
+  }
+
+  const leaderRate = leaders[0]?.rate || 0.5;
+  const metaRate = meta.mode === 'flip' ? meta.flipRate : meta.normalRate;
+  const reliability = strategy ? Math.max(strategy.rate, leaderRate, metaRate) : Math.max(leaderRate, metaRate);
+  const confidence = confidenceFromProbability(pTai, reliability);
+  const edge = Math.abs(pTai - 0.5);
+  const simpleLeader = signals.find(signal =>
+    signal.method === 'leader' &&
+    signal.details?.selectedMethod === 'simple_backbone'
+  );
+  const leaderAllowsAction = !simpleLeader || simpleLeader.learnedRate >= 0.545;
+  const action = leaderAllowsAction && meta.mode !== 'observe' && confidence >= CONFIG.MIN_ACTION_CONFIDENCE && edge >= CONFIG.MIN_ACTION_EDGE
+    ? 'predict'
+    : 'observe';
+
+  return {
+    prediction,
+    confidence,
+    pTai: Number(pTai.toFixed(4)),
+    pXiu: Number((1 - pTai).toFixed(4)),
+    edge: Number(edge.toFixed(4)),
+    action,
+    meta,
     signals
   };
 }
@@ -987,15 +1560,10 @@ function backtestPayload(type, maxRounds = 300) {
   let actionableTotal = 0;
   let actionableCorrect = 0;
   const rows = [];
-  const newestBacktestIndex = 1;
-  const oldestBacktestIndex = Math.max(
-    newestBacktestIndex,
-    data.length - CONFIG.PATTERN_WINDOW - Math.max(40, maxRounds)
-  );
+  const maxIndex = data.length - CONFIG.PATTERN_WINDOW - 1;
 
-  for (let i = data.length - CONFIG.PATTERN_WINDOW - 1; i >= newestBacktestIndex; i--) {
+  for (let i = 1; i <= maxIndex; i++) {
     if (total >= maxRounds) break;
-    if (i < oldestBacktestIndex) break;
 
     const train = data.slice(i);
     const actual = data[i - 1];
