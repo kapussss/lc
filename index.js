@@ -12,11 +12,13 @@ const API_URL_MD5 = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
 const DATA_DIR = __dirname;
 const LEARNING_FILE = path.join(DATA_DIR, 'learning_data.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'prediction_history.json');
+const OUTCOME_FILE = path.join(DATA_DIR, 'outcome_history.json');
 
 const LABELS = ['Tài', 'Xỉu'];
 
 const CONFIG = {
   MAX_HISTORY: 300,
+  MAX_OUTCOME_HISTORY: 20000,
   MAX_PREDICTIONS: 1500,
   AUTO_PROCESS_INTERVAL: 15000,
   CLEANUP_INTERVAL: 21600000,
@@ -36,6 +38,8 @@ function emptyMethodStats() {
     simple: { correct: 0, total: 0, recent: [] },
     markov: { correct: 0, total: 0, recent: [] },
     similarity: { correct: 0, total: 0, recent: [] },
+    modulo: { correct: 0, total: 0, recent: [] },
+    shape: { correct: 0, total: 0, recent: [] },
     dice: { correct: 0, total: 0, recent: [] },
     timeWindow: { correct: 0, total: 0, recent: [] },
     ensemble: { correct: 0, total: 0, recent: [] }
@@ -69,6 +73,7 @@ let learningData = {
 
 let predictionHistory = { hu: [], md5: [] };
 let lastProcessedPhien = { hu: null, md5: null };
+let outcomeHistory = { hu: [], md5: [] };
 let apiCache = { hu: { at: 0, data: null }, md5: { at: 0, data: null } };
 
 function clamp(value, min, max) {
@@ -98,3 +103,830 @@ function safeJsonRead(file, fallback) {
   try {
     if (!fs.existsSync(file)) return fallback;
     return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    console.error(`[Data] Cannot read ${path.basename(file)}:`, error.message);
+    return fallback;
+  }
+}
+
+function safeJsonWrite(file, value) {
+  try {
+    fs.writeFileSync(file, JSON.stringify(value, null, 2));
+  } catch (error) {
+    console.error(`[Data] Cannot write ${path.basename(file)}:`, error.message);
+  }
+}
+
+function ensureMethodStats(bucket) {
+  const defaults = emptyMethodStats();
+  bucket.methodPerformance = bucket.methodPerformance || defaults;
+
+  for (const [method, stats] of Object.entries(defaults)) {
+    const existing = bucket.methodPerformance[method] || {};
+    bucket.methodPerformance[method] = {
+      correct: Number(existing.correct || 0),
+      total: Number(existing.total || 0),
+      recent: Array.isArray(existing.recent) ? existing.recent.slice(-CONFIG.RECENT_METHOD_WINDOW) : []
+    };
+  }
+}
+
+function loadState() {
+  const parsedLearning = safeJsonRead(LEARNING_FILE, null);
+  if (parsedLearning) {
+    for (const type of ['hu', 'md5']) {
+      learningData[type] = {
+        ...emptyLearningBucket(),
+        ...(parsedLearning[type] || {})
+      };
+      ensureMethodStats(learningData[type]);
+      learningData[type].predictions = Array.isArray(learningData[type].predictions)
+        ? learningData[type].predictions
+        : [];
+      learningData[type].recentAccuracy = Array.isArray(learningData[type].recentAccuracy)
+        ? learningData[type].recentAccuracy
+        : [];
+      learningData[type].mistakePatterns = learningData[type].mistakePatterns || {};
+      learningData[type].timeWindowStats = learningData[type].timeWindowStats || {};
+      recalculateTotals(type);
+    }
+  }
+
+  const parsedHistory = safeJsonRead(HISTORY_FILE, null);
+  if (parsedHistory) {
+    predictionHistory = parsedHistory.history || predictionHistory;
+    lastProcessedPhien = parsedHistory.lastProcessedPhien || lastProcessedPhien;
+  }
+
+  const parsedOutcomes = safeJsonRead(OUTCOME_FILE, null);
+  if (parsedOutcomes) {
+    outcomeHistory = {
+      hu: Array.isArray(parsedOutcomes.hu) ? preprocessData(parsedOutcomes.hu) || [] : [],
+      md5: Array.isArray(parsedOutcomes.md5) ? preprocessData(parsedOutcomes.md5) || [] : []
+    };
+  }
+}
+
+function saveState() {
+  safeJsonWrite(LEARNING_FILE, learningData);
+  safeJsonWrite(HISTORY_FILE, {
+    history: predictionHistory,
+    lastProcessedPhien,
+    lastSaved: new Date().toISOString()
+  });
+  safeJsonWrite(OUTCOME_FILE, {
+    hu: outcomeHistory.hu,
+    md5: outcomeHistory.md5,
+    lastSaved: new Date().toISOString()
+  });
+}
+
+function recalculateTotals(type) {
+  const verified = learningData[type].predictions.filter(p => p.verified && p.actual !== 'TIMEOUT');
+  learningData[type].totalPredictions = verified.length;
+  learningData[type].correctPredictions = verified.filter(p => p.isCorrect).length;
+}
+
+function transformApiData(apiData) {
+  if (!apiData || !Array.isArray(apiData.list)) return null;
+
+  return apiData.list
+    .filter(item => item && item.id != null && Array.isArray(item.dices) && item.dices.length >= 3)
+    .map(item => {
+      const dice = item.dices.map(Number);
+      const sum = Number(item.point || dice.reduce((a, b) => a + b, 0));
+      return {
+        Phien: Number(item.id),
+        Ket_qua: item.resultTruyenThong === 'TAI' ? 'Tài' : 'Xỉu',
+        Xuc_xac_1: dice[0],
+        Xuc_xac_2: dice[1],
+        Xuc_xac_3: dice[2],
+        Tong: clamp(sum, 3, 18),
+        timestamp: item.createdAt || item.updatedAt || new Date().toISOString()
+      };
+    })
+    .sort((a, b) => b.Phien - a.Phien);
+}
+
+function preprocessData(rawData) {
+  if (!Array.isArray(rawData) || rawData.length === 0) return null;
+
+  const seen = new Set();
+  return rawData
+    .filter(row => {
+      if (!Number.isFinite(row.Phien) || seen.has(row.Phien)) return false;
+      seen.add(row.Phien);
+      return LABELS.includes(row.Ket_qua);
+    })
+    .map(row => ({
+      ...row,
+      Tong: clamp(Number(row.Tong || 10), 3, 18)
+    }));
+}
+
+async function fetchApi(type, force = false) {
+  const cached = apiCache[type];
+  if (!force && cached.data && Date.now() - cached.at < 4000) return cached.data;
+
+  const url = type === 'hu' ? API_URL_HU : API_URL_MD5;
+  try {
+    const response = await axios.get(url, { timeout: CONFIG.FETCH_TIMEOUT });
+    const data = preprocessData(transformApiData(response.data));
+    if (data && data.length > 0) {
+      apiCache[type] = { at: Date.now(), data };
+      return data;
+    }
+  } catch (error) {
+    console.error(`[Fetch ${type}]`, error.message);
+  }
+
+  return cached.data;
+}
+
+function currentStreak(results) {
+  if (!results.length) return { value: null, length: 0 };
+  let length = 1;
+  for (let i = 1; i < results.length; i++) {
+    if (results[i] !== results[0]) break;
+    length++;
+  }
+  return { value: results[0], length };
+}
+
+function alternatingLength(results) {
+  if (!results.length) return 0;
+  let length = 1;
+  for (let i = 1; i < results.length; i++) {
+    if (results[i] === results[i - 1]) break;
+    length++;
+  }
+  return length;
+}
+
+function betaProbability(success, total, prior = 2) {
+  return (success + prior * 0.5) / (total + prior);
+}
+
+function confidenceFromProbability(pTai, reliability = 0.5) {
+  const edge = Math.abs(pTai - 0.5);
+  const cap = CONFIG.CONFIDENCE_CAP + Math.max(0, reliability - 0.55) * 30;
+  return Math.round(clamp(50 + edge * 135, 50, cap));
+}
+
+function makeSignal(method, pTai, baseWeight, details = {}) {
+  const probability = clamp(Number(pTai), 0.08, 0.92);
+  return {
+    method,
+    prediction: probability >= 0.5 ? 'Tài' : 'Xỉu',
+    pTai: probability,
+    confidence: confidenceFromProbability(probability),
+    baseWeight,
+    details
+  };
+}
+
+function methodRate(type, method) {
+  const stats = learningData[type].methodPerformance[method];
+  if (!stats) return { rate: 0.5, total: 0, recentRate: 0.5 };
+
+  const longRate = betaProbability(stats.correct, stats.total, CONFIG.METHOD_PRIOR);
+  const recentRate = stats.recent.length >= 12 ? mean(stats.recent, longRate) : longRate;
+  const rate = longRate * 0.45 + recentRate * 0.55;
+
+  return { rate, total: stats.total, recentRate };
+}
+
+function reliabilityWeight(type, signal) {
+  const { rate, total } = methodRate(type, signal.method);
+  const sampleTrust = clamp(Math.sqrt(total / 180), 0, 1);
+  const learnedEdge = rate - 0.5;
+  const signalEdge = Math.abs(signal.pTai - 0.5);
+
+  let pTai = signal.pTai;
+  let weight = signal.baseWeight * (0.25 + signalEdge * 8);
+
+  if (total >= 60 && learnedEdge < -0.035) {
+    pTai = 1 - pTai;
+    weight *= 0.55 + sampleTrust * 0.25;
+  } else if (total >= 30) {
+    weight *= 0.65 + sampleTrust * clamp((learnedEdge + 0.04) * 8, 0, 1.35);
+  }
+
+  return {
+    ...signal,
+    pTai,
+    prediction: pTai >= 0.5 ? 'Tài' : 'Xỉu',
+    learnedRate: rate,
+    effectiveWeight: clamp(weight, 0.01, 2.5)
+  };
+}
+
+function predictSimple(results, type) {
+  const streak = currentStreak(results);
+  const alt = alternatingLength(results);
+  const key = results.slice(0, 6).join('');
+  const mistakes = learningData[type].mistakePatterns[key]?.count || 0;
+
+  if (mistakes >= 5) {
+    return makeSignal('simple', opposite(results[0]) === 'Tài' ? 0.57 : 0.43, 0.7, {
+      reason: 'mistake_reversal',
+      mistakes
+    });
+  }
+
+  if (alt >= 6) {
+    return makeSignal('simple', opposite(results[0]) === 'Tài' ? 0.55 : 0.45, 0.55, {
+      reason: 'alternating',
+      alt
+    });
+  }
+
+  if (streak.length >= 5) {
+    return makeSignal('simple', streak.value === 'Tài' ? 0.54 : 0.46, 0.5, {
+      reason: 'long_streak',
+      streak: streak.length
+    });
+  }
+
+  const last8 = results.slice(0, 8);
+  const tai = last8.filter(r => r === 'Tài').length;
+  const pTai = betaProbability(tai, last8.length, 10);
+  return makeSignal('simple', pTai, 0.35, {
+    reason: 'recent_bias',
+    tai,
+    total: last8.length
+  });
+}
+
+function predictMarkov(data) {
+  const results = data.map(row => row.Ket_qua);
+  const candidates = [];
+
+  for (let size = 6; size >= 3; size--) {
+    const current = results.slice(0, size).join('|');
+    let tai = 0;
+    let total = 0;
+
+    for (let i = 1; i <= results.length - size; i++) {
+      const pattern = results.slice(i, i + size).join('|');
+      if (pattern !== current) continue;
+
+      total++;
+      if (results[i - 1] === 'Tài') tai++;
+    }
+
+    if (total >= 4) {
+      candidates.push({ size, tai, total, pTai: betaProbability(tai, total, 6) });
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  const weighted = candidates.reduce((acc, item) => {
+    const weight = item.total * item.size;
+    acc.weight += weight;
+    acc.tai += item.pTai * weight;
+    return acc;
+  }, { tai: 0, weight: 0 });
+
+  return makeSignal('markov', weighted.tai / weighted.weight, 0.85, {
+    matches: candidates.map(c => ({ size: c.size, total: c.total, tai: c.tai }))
+  });
+}
+
+function featureVector(window) {
+  const results = window.map(row => row.Ket_qua);
+  const sums = window.map(row => row.Tong);
+  const last10 = results.slice(0, 10);
+  const last20 = results.slice(0, 20);
+  const streak = currentStreak(results);
+  const avg5 = mean(sums.slice(0, 5), 10.5);
+  const avg20 = mean(sums.slice(0, 20), 10.5);
+
+  return {
+    tai10: last10.filter(r => r === 'Tài').length / Math.max(last10.length, 1),
+    tai20: last20.filter(r => r === 'Tài').length / Math.max(last20.length, 1),
+    streakType: streak.value,
+    streakLength: Math.min(streak.length, 8),
+    altLength: Math.min(alternatingLength(results), 8),
+    sumDrift: (avg5 - avg20) / 6,
+    avg5
+  };
+}
+
+function similarityScore(a, b) {
+  let score = 0;
+  score += Math.max(0, 1 - Math.abs(a.tai10 - b.tai10) * 3) * 30;
+  score += Math.max(0, 1 - Math.abs(a.tai20 - b.tai20) * 2) * 20;
+  score += a.streakType === b.streakType ? 18 : 0;
+  score += Math.max(0, 1 - Math.abs(a.streakLength - b.streakLength) / 6) * 14;
+  score += Math.max(0, 1 - Math.abs(a.altLength - b.altLength) / 6) * 10;
+  score += Math.max(0, 1 - Math.abs(a.sumDrift - b.sumDrift) * 3) * 8;
+  return score;
+}
+
+function predictSimilarity(data) {
+  if (data.length < CONFIG.PATTERN_WINDOW + 8) return null;
+
+  const current = featureVector(data.slice(0, CONFIG.PATTERN_WINDOW));
+  const matches = [];
+
+  for (let i = 1; i <= data.length - CONFIG.PATTERN_WINDOW; i++) {
+    const candidate = data.slice(i, i + CONFIG.PATTERN_WINDOW);
+    const score = similarityScore(current, featureVector(candidate));
+    if (score < 42) continue;
+
+    matches.push({
+      score,
+      nextResult: data[i - 1].Ket_qua,
+      index: i
+    });
+  }
+
+  if (matches.length < CONFIG.PATTERN_MIN_MATCHES) return null;
+
+  matches.sort((a, b) => b.score - a.score);
+  const top = matches.slice(0, 80);
+  let taiWeight = 0;
+  let totalWeight = 0;
+
+  for (const match of top) {
+    const recencyBoost = Math.exp(-match.index / Math.max(data.length * 0.35, 1));
+    const weight = Math.pow(match.score / 100, 1.6) * (1 + recencyBoost * 0.25);
+    totalWeight += weight;
+    if (match.nextResult === 'Tài') taiWeight += weight;
+  }
+
+  return makeSignal('similarity', betaProbability(taiWeight, totalWeight, 4), 1.0, {
+    matches: top.length,
+    bestScore: Number(top[0].score.toFixed(1))
+  });
+}
+
+function predictDice(sums) {
+  if (sums.length < 18) return null;
+
+  const recent = sums.slice(0, 12);
+  const avg = mean(recent, 10.5);
+  const drift = (avg - 10.5) / 3.2;
+  if (Math.abs(drift) < 0.12) return null;
+
+  const pTai = clamp(0.5 + drift * 0.06, 0.43, 0.57);
+  return makeSignal('dice', pTai, 0.35, {
+    avg: Number(avg.toFixed(2)),
+    drift: Number(drift.toFixed(3))
+  });
+}
+
+function updateTimeStats(type, actual, timestamp) {
+  const date = new Date(timestamp);
+  const slot = `${date.getHours()}:${String(Math.floor(date.getMinutes() / 15) * 15).padStart(2, '0')}`;
+  const stats = learningData[type].timeWindowStats[slot] || { tai: 0, xiu: 0, total: 0 };
+
+  if (actual === 'Tài') stats.tai++;
+  else stats.xiu++;
+  stats.total++;
+  stats.lastUpdate = new Date().toISOString();
+  learningData[type].timeWindowStats[slot] = stats;
+}
+
+function predictTimeWindow(type, now = new Date()) {
+  const slot = `${now.getHours()}:${String(Math.floor(now.getMinutes() / 15) * 15).padStart(2, '0')}`;
+  const stats = learningData[type].timeWindowStats[slot];
+  if (!stats || stats.total < 30) return null;
+
+  const pTai = betaProbability(stats.tai, stats.total, 20);
+  if (Math.abs(pTai - 0.5) < 0.045) return null;
+
+  return makeSignal('timeWindow', pTai, 0.3, {
+    slot,
+    total: stats.total
+  });
+}
+
+function calculatePrediction(data, type) {
+  const results = data.slice(0, 60).map(row => row.Ket_qua);
+  const sums = data.slice(0, 60).map(row => row.Tong);
+  const rawSignals = [
+    predictSimple(results, type),
+    predictMarkov(data),
+    predictSimilarity(data),
+    predictDice(sums),
+    predictTimeWindow(type)
+  ].filter(Boolean);
+
+  const signals = rawSignals.map(signal => reliabilityWeight(type, signal));
+  const neutralWeight = 1.1;
+  let weightedTai = neutralWeight * 0.5;
+  let totalWeight = neutralWeight;
+
+  for (const signal of signals) {
+    weightedTai += signal.pTai * signal.effectiveWeight;
+    totalWeight += signal.effectiveWeight;
+  }
+
+  const pTai = clamp(weightedTai / totalWeight, 0.35, 0.65);
+  const prediction = pTai >= 0.5 ? 'Tài' : 'Xỉu';
+  const reliability = methodRate(type, 'ensemble').rate;
+  const confidence = confidenceFromProbability(pTai, reliability);
+  const edge = Math.abs(pTai - 0.5);
+  const action = confidence >= CONFIG.MIN_ACTION_CONFIDENCE && edge >= CONFIG.MIN_ACTION_EDGE
+    ? 'predict'
+    : 'observe';
+
+  return {
+    prediction,
+    confidence,
+    pTai: Number(pTai.toFixed(4)),
+    pXiu: Number((1 - pTai).toFixed(4)),
+    edge: Number(edge.toFixed(4)),
+    action,
+    signals
+  };
+}
+
+function upsertHistory(type, phien, result) {
+  const record = {
+    phien_hien_tai: String(phien),
+    du_doan: normalizeResult(result.prediction),
+    ti_le: `${result.confidence}%`,
+    id: 'kapub',
+    action: result.action,
+    edge: result.edge,
+    timestamp: new Date().toISOString()
+  };
+
+  const existingIndex = predictionHistory[type].findIndex(item => item.phien_hien_tai === String(phien));
+  if (existingIndex >= 0) {
+    predictionHistory[type][existingIndex] = {
+      ...predictionHistory[type][existingIndex],
+      ...record
+    };
+  } else {
+    predictionHistory[type].unshift(record);
+  }
+
+  predictionHistory[type] = predictionHistory[type].slice(0, CONFIG.MAX_HISTORY);
+  return record;
+}
+
+function findPrediction(type, phien) {
+  return learningData[type].predictions.find(pred => pred.phien === String(phien));
+}
+
+function recordPrediction(type, phien, result) {
+  const existing = findPrediction(type, phien);
+  if (existing) return existing;
+
+  const record = {
+    phien: String(phien),
+    prediction: result.prediction,
+    confidence: result.confidence,
+    pTai: result.pTai,
+    edge: result.edge,
+    action: result.action,
+    subModelOutputs: Object.fromEntries(result.signals.map(signal => [
+      signal.method,
+      {
+        prediction: signal.prediction,
+        pTai: Number(signal.pTai.toFixed(4)),
+        confidence: signal.confidence,
+        learnedRate: Number((signal.learnedRate || 0.5).toFixed(4)),
+        weight: Number((signal.effectiveWeight || 0).toFixed(4)),
+        details: signal.details || {}
+      }
+    ])),
+    timestamp: new Date().toISOString(),
+    verified: false,
+    actual: null,
+    isCorrect: null
+  };
+
+  learningData[type].predictions.unshift(record);
+  learningData[type].predictions = learningData[type].predictions.slice(0, CONFIG.MAX_PREDICTIONS);
+  return record;
+}
+
+function updateStreak(type, isCorrect) {
+  const streak = learningData[type].streakAnalysis;
+  if (isCorrect) {
+    streak.wins++;
+    streak.currentStreak = streak.currentStreak >= 0 ? streak.currentStreak + 1 : 1;
+    streak.bestStreak = Math.max(streak.bestStreak, streak.currentStreak);
+  } else {
+    streak.losses++;
+    streak.currentStreak = streak.currentStreak <= 0 ? streak.currentStreak - 1 : -1;
+    streak.worstStreak = Math.min(streak.worstStreak, streak.currentStreak);
+  }
+}
+
+function pushMethodResult(type, method, isCorrect) {
+  ensureMethodStats(learningData[type]);
+  const stats = learningData[type].methodPerformance[method];
+  if (!stats) return;
+
+  stats.total++;
+  if (isCorrect) stats.correct++;
+  stats.recent.push(isCorrect ? 1 : 0);
+  stats.recent = stats.recent.slice(-CONFIG.RECENT_METHOD_WINDOW);
+}
+
+async function verifyPredictions(type, currentData) {
+  let changed = false;
+  const now = Date.now();
+
+  for (const pred of learningData[type].predictions) {
+    if (pred.verified) continue;
+
+    const actual = currentData.find(row => String(row.Phien) === pred.phien);
+    if (!actual) {
+      const ageMs = now - new Date(pred.timestamp).getTime();
+      if (Number.isFinite(ageMs) && ageMs > 45 * 60 * 1000) {
+        pred.verified = true;
+        pred.actual = 'TIMEOUT';
+        pred.isCorrect = false;
+        changed = true;
+      }
+      continue;
+    }
+
+    pred.verified = true;
+    pred.actual = actual.Ket_qua;
+    pred.isCorrect = pred.prediction === actual.Ket_qua;
+
+    learningData[type].totalPredictions++;
+    if (pred.isCorrect) learningData[type].correctPredictions++;
+    updateStreak(type, pred.isCorrect);
+
+    learningData[type].recentAccuracy.push(pred.isCorrect ? 1 : 0);
+    learningData[type].recentAccuracy = learningData[type].recentAccuracy.slice(-300);
+
+    pushMethodResult(type, 'ensemble', pred.isCorrect);
+
+    for (const [method, output] of Object.entries(pred.subModelOutputs || {})) {
+      pushMethodResult(type, method, output.prediction === actual.Ket_qua);
+    }
+
+    if (!pred.isCorrect) {
+      const context = currentData.slice(0, 6).map(row => row.Ket_qua).join('');
+      learningData[type].mistakePatterns[context] = learningData[type].mistakePatterns[context] || {
+        count: 0,
+        lastSeen: null
+      };
+      learningData[type].mistakePatterns[context].count++;
+      learningData[type].mistakePatterns[context].lastSeen = new Date().toISOString();
+    }
+
+    updateTimeStats(type, actual.Ket_qua, pred.timestamp);
+    changed = true;
+  }
+
+  if (changed) {
+    learningData[type].lastUpdate = new Date().toISOString();
+    recalculateTotals(type);
+  }
+
+  return changed;
+}
+
+async function getOrCreatePrediction(type, data) {
+  await verifyPredictions(type, data);
+
+  const latestPhien = data[0].Phien;
+  const nextPhien = latestPhien + 1;
+  const existing = findPrediction(type, nextPhien);
+
+  if (existing && !existing.verified) {
+    upsertHistory(type, nextPhien, existing);
+    return {
+      phien: nextPhien,
+      result: existing,
+      created: false
+    };
+  }
+
+  const result = calculatePrediction(data, type);
+  const record = recordPrediction(type, nextPhien, result);
+  upsertHistory(type, nextPhien, record);
+  lastProcessedPhien[type] = nextPhien;
+  saveState();
+
+  return {
+    phien: nextPhien,
+    result: record,
+    created: true
+  };
+}
+
+async function autoProcessType(type) {
+  const data = await fetchApi(type, true);
+  if (!data || data.length === 0) return;
+
+  await verifyPredictions(type, data);
+  const latestPhien = data[0].Phien;
+  const nextPhien = latestPhien + 1;
+
+  if (lastProcessedPhien[type] === nextPhien && findPrediction(type, nextPhien)) {
+    saveState();
+    return;
+  }
+
+  const { result, created } = await getOrCreatePrediction(type, data);
+  if (created) {
+    console.log(`[${type.toUpperCase()} #${nextPhien}] ${result.prediction} (${result.confidence}%) edge=${result.edge} action=${result.action}`);
+  }
+}
+
+async function autoProcessPredictions() {
+  try {
+    await Promise.all([autoProcessType('hu'), autoProcessType('md5')]);
+    saveState();
+  } catch (error) {
+    console.error('[Auto]', error.message);
+  }
+}
+
+function publicPrediction(record, phien) {
+  return {
+    phien_hien_tai: String(phien || record.phien),
+    du_doan: normalizeResult(record.prediction),
+    ti_le: `${record.confidence}%`,
+    id: 'kapub'
+  };
+}
+
+function methodPerformance(type) {
+  ensureMethodStats(learningData[type]);
+  const output = {};
+
+  for (const [method, perf] of Object.entries(learningData[type].methodPerformance)) {
+    if (perf.total > 0) {
+      output[method] = {
+        accuracy: `${(perf.correct / perf.total * 100).toFixed(2)}%`,
+        recentAccuracy: `${(mean(perf.recent, 0) * 100).toFixed(2)}%`,
+        total: perf.total,
+        correct: perf.correct
+      };
+    }
+  }
+
+  return output;
+}
+
+function statsPayload(type) {
+  recalculateTotals(type);
+  const stats = learningData[type];
+  const verified = stats.predictions.filter(pred => pred.verified && pred.actual !== 'TIMEOUT');
+  const actionable = verified.filter(pred => pred.action === 'predict');
+  const actionableCorrect = actionable.filter(pred => pred.isCorrect).length;
+  const recent = stats.recentAccuracy.slice(-CONFIG.RECENT_ACCURACY_WINDOW);
+  const overall = stats.totalPredictions > 0
+    ? stats.correctPredictions / stats.totalPredictions * 100
+    : 0;
+  const recentAcc = recent.length > 0 ? mean(recent, 0) * 100 : 0;
+  const actionableAcc = actionable.length > 0
+    ? actionableCorrect / actionable.length * 100
+    : 0;
+
+  return {
+    type: type === 'hu' ? 'Lẩu Cua 79 - Tài Xỉu Hũ' : 'Lẩu Cua 79 - Tài Xỉu MD5',
+    totalPredictions: stats.totalPredictions,
+    correctPredictions: stats.correctPredictions,
+    overallAccuracy: `${overall.toFixed(2)}%`,
+    actionablePredictions: actionable.length,
+    actionableCorrect,
+    actionableAccuracy: `${actionableAcc.toFixed(2)}%`,
+    recentAccuracy: `${recentAcc.toFixed(2)}%`,
+    streakAnalysis: stats.streakAnalysis,
+    methodPerformance: methodPerformance(type),
+    mistakedPatterns: Object.keys(stats.mistakePatterns || {}).length,
+    lastUpdate: stats.lastUpdate,
+    note: 'Accuracy is calculated from verified unique rounds only; duplicate calls do not inflate totals.'
+  };
+}
+
+async function predictionRoute(type, res) {
+  const data = await fetchApi(type, true);
+  if (!data || data.length === 0) {
+    res.status(502).json({ error: 'Cannot fetch data' });
+    return;
+  }
+
+  const { phien, result } = await getOrCreatePrediction(type, data);
+  res.json(publicPrediction(result, phien));
+}
+
+async function historyRoute(type, res) {
+  const data = await fetchApi(type, true);
+  if (data && data.length > 0) {
+    await verifyPredictions(type, data);
+    saveState();
+  }
+
+  const historyWithStatus = predictionHistory[type].map(record => {
+    const prediction = findPrediction(type, record.phien_hien_tai);
+    return {
+      ...record,
+      ket_qua_thuc_te: prediction?.actual || null,
+      status: prediction?.isCorrect === true ? 'correct' : (prediction?.isCorrect === false ? 'wrong' : 'pending')
+    };
+  });
+
+  res.json({
+    type: type === 'hu' ? 'Lẩu Cua 79 - Tài Xỉu Hũ' : 'Lẩu Cua 79 - Tài Xỉu MD5',
+    history: historyWithStatus,
+    total: historyWithStatus.length
+  });
+}
+
+async function analysisRoute(type, res) {
+  const data = await fetchApi(type, true);
+  if (!data || data.length === 0) {
+    res.status(502).json({ error: 'Cannot fetch data' });
+    return;
+  }
+
+  await verifyPredictions(type, data);
+  const result = calculatePrediction(data, type);
+
+  res.json({
+    prediction: normalizeResult(result.prediction),
+    confidence: result.confidence,
+    pTai: result.pTai,
+    pXiu: result.pXiu,
+    edge: result.edge,
+    action: result.action,
+    details: result.signals.map(signal => ({
+      method: signal.method,
+      prediction: signal.prediction,
+      pTai: Number(signal.pTai.toFixed(4)),
+      confidence: signal.confidence,
+      learnedRate: Number((signal.learnedRate || 0.5).toFixed(4)),
+      weight: Number((signal.effectiveWeight || 0).toFixed(4)),
+      details: signal.details
+    }))
+  });
+}
+
+function resetState() {
+  learningData = {
+    hu: emptyLearningBucket(),
+    md5: emptyLearningBucket()
+  };
+  predictionHistory = { hu: [], md5: [] };
+  lastProcessedPhien = { hu: null, md5: null };
+  apiCache = { hu: { at: 0, data: null }, md5: { at: 0, data: null } };
+  saveState();
+}
+
+function cleanupOldData() {
+  const oneDayAgo = Date.now() - 86400000;
+
+  for (const type of ['hu', 'md5']) {
+    learningData[type].predictions = learningData[type].predictions.slice(0, CONFIG.MAX_PREDICTIONS);
+    learningData[type].recentAccuracy = learningData[type].recentAccuracy.slice(-300);
+    predictionHistory[type] = predictionHistory[type].slice(0, CONFIG.MAX_HISTORY);
+
+    for (const [pattern, info] of Object.entries(learningData[type].mistakePatterns || {})) {
+      if (info.lastSeen && new Date(info.lastSeen).getTime() < oneDayAgo) {
+        delete learningData[type].mistakePatterns[pattern];
+      }
+    }
+
+    recalculateTotals(type);
+  }
+
+  saveState();
+}
+
+app.get('/', (req, res) => {
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.send('kapub');
+});
+
+app.get('/lc79-hu', (req, res) => predictionRoute('hu', res));
+app.get('/lc79-md5', (req, res) => predictionRoute('md5', res));
+app.get('/lc79-hu/lichsu', (req, res) => historyRoute('hu', res));
+app.get('/lc79-md5/lichsu', (req, res) => historyRoute('md5', res));
+app.get('/lc79-hu/analysis', (req, res) => analysisRoute('hu', res));
+app.get('/lc79-md5/analysis', (req, res) => analysisRoute('md5', res));
+app.get('/lc79-hu/stats', (req, res) => res.json(statsPayload('hu')));
+app.get('/lc79-md5/stats', (req, res) => res.json(statsPayload('md5')));
+
+app.get('/reset', (req, res) => {
+  resetState();
+  res.json({ message: 'All data reset successfully' });
+});
+
+loadState();
+setTimeout(() => autoProcessPredictions(), 3000);
+setInterval(() => autoProcessPredictions(), CONFIG.AUTO_PROCESS_INTERVAL);
+setInterval(() => cleanupOldData(), CONFIG.CLEANUP_INTERVAL);
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log('');
+  console.log('LC79 prediction server v10');
+  console.log(`Server running: http://0.0.0.0:${PORT}`);
+  console.log('Accuracy fixes: unique rounds, corrected pattern labels, per-method scoring, conservative edge gating.');
+  console.log('');
+});
