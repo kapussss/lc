@@ -10,7 +10,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const AUTH_KEY = "kapub";
 const USER_ID = "@Kapubb";
-const ALGO_NAME = "PatternMASTER";
+const ALGO_NAME = "AIVip";
 
 // ================= CONFIG =================
 const GAME_CONFIG = {
