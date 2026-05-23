@@ -1,13 +1,14 @@
-// server.js - DICE MASTER AI v11.0 (Advanced Dice Engine + Anti-Cheat)
+// server_ultimate_v12.js - Dice Algorithms Master Edition
+// Giữ nguyên các thuật toán cầu + THÊM thuật toán dice cao cấp
+
 const express = require('express');
 const axios = require('axios');
-const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const AUTH_KEY = "kapub";
 const USER_ID = "@Kapubb";
-const ALGO_NAME = "DiceMASTER_AI_v11";
+const ALGO_NAME = "DiceMASTER";
 
 // ================= CONFIG =================
 const GAME_CONFIG = {
@@ -37,598 +38,451 @@ const GAME_CONFIG = {
     }
 };
 
-// ================= CACHE & HISTORY =================
-let gameCache = {};
-let gameHistory = {};
-let predictionHistory = {};
-let pendingPredictions = {};
-let lastProcessedSession = {};
+// ================= DICE ALGORITHMS ENGINE =================
 
-// ================= NÂNG CẤP: FEATURE EXTRACTOR =================
-class FeatureExtractor {
-    static extractFeatures(history) {
-        if (!history || history.length < 10) return null;
-        
-        const n = history.length;
-        const recent10 = history.slice(-10);
-        const recent20 = history.slice(-20);
-        const recent50 = history.slice(-50);
-        
-        // Kết quả dạng số (T=1, X=0)
-        const results = history.map(h => h.result === 'Tài' ? 1 : 0);
-        
-        // 1. Tỷ lệ Tài trong các khoảng
-        const taiRate10 = recent10.filter(h => h.result === 'Tài').length / 10;
-        const taiRate20 = recent20.filter(h => h.result === 'Tài').length / 20;
-        const taiRate50 = recent50.filter(h => h.result === 'Tài').length / 50;
-        
-        // 2. Thống kê xúc xắc
-        const allDices = history.map(h => [h.d1, h.d2, h.d3]).flat();
-        const faceFreq = {1:0,2:0,3:0,4:0,5:0,6:0};
-        allDices.forEach(d => faceFreq[d]++);
-        const totalDices = allDices.length;
-        
-        // 3. Chuỗi HL (High/Low)
-        const hlStrings = recent10.map(h => {
-            const hl = (h.d1 >= 4 ? 'H' : 'L') + (h.d2 >= 4 ? 'H' : 'L') + (h.d3 >= 4 ? 'H' : 'L');
-            return hl;
-        });
-        const hCount10 = hlStrings.join('').split('H').length - 1;
-        const hlRate10 = hCount10 / 30; // 30 vị trí trong 10 phiên
-        
-        // 4. Chuỗi Chẵn/Lẻ
-        const oeStrings = recent10.map(h => {
-            return (h.d1 % 2 === 0 ? 'C' : 'L') + (h.d2 % 2 === 0 ? 'C' : 'L') + (h.d3 % 2 === 0 ? 'C' : 'L');
-        });
-        const cCount10 = oeStrings.join('').split('C').length - 1;
-        const ceRate10 = cCount10 / 30;
-        
-        // 5. Độ lệch chuẩn tổng điểm
-        const scores10 = recent10.map(h => h.totalScore);
-        const avgScore10 = scores10.reduce((a,b) => a+b, 0) / 10;
-        const stdScore10 = Math.sqrt(scores10.reduce((sum, s) => sum + Math.pow(s - avgScore10, 2), 0) / 10);
-        
-        // 6. Số lần đảo chiều (Runs)
-        let runs = 0;
-        for (let i = 1; i < n; i++) {
-            if (results[i] !== results[i-1]) runs++;
-        }
-        const runsRate = runs / (n - 1);
-        
-        // 7. Streak hiện tại
-        let currentStreak = 1;
-        const lastResult = results[n-1];
-        for (let i = n-2; i >= 0; i--) {
-            if (results[i] === lastResult) currentStreak++;
-            else break;
-        }
-        
-        // 8. Tần suất xuất hiện của tổng điểm
-        const scoreFreq = {};
-        recent50.forEach(h => {
-            scoreFreq[h.totalScore] = (scoreFreq[h.totalScore] || 0) + 1;
-        });
-        
-        // 9. Chuỗi pattern 5 phiên gần nhất
-        const pattern5 = results.slice(-5).join('');
-        const pattern10 = results.slice(-10).join('');
-        
-        // 10. Biến động tổng (Volatility)
-        const scores50 = recent50.map(h => h.totalScore);
-        const volatility = this.calculateVolatility(scores50);
-        
-        return {
-            taiRate10, taiRate20, taiRate50,
-            faceFreq, totalDices,
-            hlRate10, ceRate10,
-            avgScore10, stdScore10,
-            runsRate, currentStreak,
-            lastResult,
-            scoreFreq,
-            pattern5, pattern10,
-            volatility,
-            lastDices: [history[n-1].d1, history[n-1].d2, history[n-1].d3],
-            lastTotal: history[n-1].totalScore
-        };
-    }
-    
-    static calculateVolatility(scores) {
-        if (scores.length < 2) return 0;
-        let sumChanges = 0;
-        for (let i = 1; i < scores.length; i++) {
-            sumChanges += Math.abs(scores[i] - scores[i-1]);
-        }
-        return sumChanges / (scores.length - 1);
-    }
-}
-
-// ================= NÂNG CẤP: DICE GRAPH ENGINE (Markov bậc cao) =================
-class DiceGraphEngine {
+class DiceAlgorithms {
     constructor() {
-        // Markov chain cho từng viên xúc xắc (bậc 1: từ mặt trước -> mặt sau)
-        this.markovDice1 = Array.from({length: 7}, () => Array(7).fill(0));
-        this.markovDice2 = Array.from({length: 7}, () => Array(7).fill(0));
-        this.markovDice3 = Array.from({length: 7}, () => Array(7).fill(0));
+        // 1. Face analysis
+        this.faceFrequency = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+        this.faceByPosition = { d1: {}, d2: {}, d3: {} };
+        this.faceGaps = {}; // Khoảng cách giữa các lần xuất hiện của mỗi mặt
+        this.lastFacePosition = {};
         
-        // Markov cho tổng điểm (bậc 2: từ (tổng trước, tổng hiện tại) -> tổng tiếp theo)
-        this.markovScore2 = {}; // key: "prevScore_currentScore" -> {nextScore: count}
+        // 2. Transition matrices
+        this.faceTransition = {}; // Mặt trước -> mặt sau
+        this.positionTransition = { d1: {}, d2: {}, d3: {} };
+        this.cumulativeTransition = {};
         
-        // Markov cho pattern T/X (bậc 3)
-        this.markovPattern3 = {}; // key: "TTX" -> {T: count, X: count}
+        // 3. Sum analysis
+        this.sumFrequency = {};
+        this.sumTransition = {};
+        this.sumTrend = [];
         
-        // Đếm số lần cập nhật
-        this.updateCount = 0;
+        // 4. Pair & Triple analysis
+        this.pairFrequency = {}; // Cặp (d1,d2), (d2,d3), (d1,d3)
+        this.tripleFrequency = {}; // Bộ ba (d1,d2,d3)
+        this.doubleFrequency = { 0: 0, 1: 0, 2: 0, 3: 0 }; // Số mặt trùng nhau
+        
+        // 5. Sequence analysis
+        this.diceSequence = [];
+        this.sequencePatterns = {};
+        
+        // 6. Statistical metrics
+        this.meanDice = { d1: 0, d2: 0, d3: 0, total: 0 };
+        this.varianceDice = { d1: 0, d2: 0, d3: 0, total: 0 };
+        this.hotFaces = []; // Mặt đang "nóng"
+        this.coldFaces = []; // Mặt đang "lạnh"
+        
+        // 7. Machine learning models
+        this.naiveBayes = {}; // Xác suất mặt dựa trên các mặt trước
+        this.hmmStates = []; // Hidden Markov Model states
+    }
+
+    // ========== 1. FACE DISTRIBUTION ANALYZER ==========
+    updateFaceDistribution(d1, d2, d3) {
+        // Tần suất từng mặt
+        this.faceFrequency[d1]++;
+        this.faceFrequency[d2]++;
+        this.faceFrequency[d3]++;
+        
+        // Tần suất theo vị trí
+        this.faceByPosition.d1[d1] = (this.faceByPosition.d1[d1] || 0) + 1;
+        this.faceByPosition.d2[d2] = (this.faceByPosition.d2[d2] || 0) + 1;
+        this.faceByPosition.d3[d3] = (this.faceByPosition.d3[d3] || 0) + 1;
+        
+        // Gap analysis
+        const now = Date.now();
+        [d1, d2, d3].forEach(face => {
+            if (this.lastFacePosition[face]) {
+                const gap = this.diceSequence.length - this.lastFacePosition[face];
+                if (!this.faceGaps[face]) this.faceGaps[face] = [];
+                this.faceGaps[face].push(gap);
+                if (this.faceGaps[face].length > 50) this.faceGaps[face].shift();
+            }
+            this.lastFacePosition[face] = this.diceSequence.length;
+        });
+        
+        // Hot/Cold faces (dựa trên tần suất gần đây)
+        this.updateHotColdFaces();
     }
     
-    update(history) {
-        if (!history || history.length < 4) return;
-        const n = history.length;
+    updateHotColdFaces() {
+        const total = this.diceSequence.length * 3 || 1;
+        const expectedFreq = total / 6;
         
-        // Cập nhật Markov dice bậc 1
-        const last = history[n-1];
-        const prev = history[n-2];
+        const faces = [1,2,3,4,5,6];
+        this.hotFaces = [];
+        this.coldFaces = [];
         
-        if (prev.d1 >= 1 && prev.d1 <= 6 && last.d1 >= 1 && last.d1 <= 6) {
-            this.markovDice1[prev.d1][last.d1]++;
-        }
-        if (prev.d2 >= 1 && prev.d2 <= 6 && last.d2 >= 1 && last.d2 <= 6) {
-            this.markovDice2[prev.d2][last.d2]++;
-        }
-        if (prev.d3 >= 1 && prev.d3 <= 6 && last.d3 >= 1 && last.d3 <= 6) {
-            this.markovDice3[prev.d3][last.d3]++;
-        }
-        
-        // Cập nhật Markov score bậc 2
-        if (n >= 3) {
-            const prev2 = history[n-3];
-            const key = `${prev2.totalScore}_${prev.totalScore}`;
-            if (!this.markovScore2[key]) {
-                this.markovScore2[key] = {};
-            }
-            this.markovScore2[key][last.totalScore] = (this.markovScore2[key][last.totalScore] || 0) + 1;
-        }
-        
-        // Cập nhật Markov pattern T/X bậc 3
-        if (n >= 4) {
-            const r1 = history[n-3].result === 'Tài' ? 'T' : 'X';
-            const r2 = history[n-2].result === 'Tài' ? 'T' : 'X';
-            const r3 = history[n-1].result === 'Tài' ? 'T' : 'X';
-            const pattern = r1 + r2 + r3;
-            
-            if (!this.markovPattern3[pattern]) {
-                this.markovPattern3[pattern] = {T: 0, X: 0};
-            }
-            const r4 = last.result === 'Tài' ? 'T' : 'X';
-            this.markovPattern3[pattern][r4]++;
-        }
-        
-        this.updateCount++;
+        faces.forEach(face => {
+            const actualFreq = this.faceFrequency[face] || 0;
+            const ratio = actualFreq / expectedFreq;
+            if (ratio > 1.2) this.hotFaces.push(face);
+            if (ratio < 0.8) this.coldFaces.push(face);
+        });
     }
     
-    predictNext(history) {
-        const predictions = [];
-        const n = history.length;
-        const last = history[n-1];
-        const prev = history[n-2];
+    predictByFaceDistribution() {
+        // Dựa vào mặt nào đang hot/cold
+        let taiScore = 0, xiuScore = 0;
         
-        // Dự đoán từ Markov dice bậc 1
-        const dice1Pred = this.getMostLikelyNext(this.markovDice1[last.d1]);
-        const dice2Pred = this.getMostLikelyNext(this.markovDice2[last.d2]);
-        const dice3Pred = this.getMostLikelyNext(this.markovDice3[last.d3]);
+        this.hotFaces.forEach(face => {
+            if (face >= 4) taiScore += 0.15;
+            else xiuScore += 0.15;
+        });
         
-        if (dice1Pred && dice2Pred && dice3Pred) {
-            const totalPred = dice1Pred.value + dice2Pred.value + dice3Pred.value;
-            predictions.push({
-                predict: totalPred >= 11 ? 'Tài' : 'Xỉu',
-                confidence: Math.min(0.7, (dice1Pred.prob + dice2Pred.prob + dice3Pred.prob) / 3),
-                source: 'markov_dice_1',
-                weight: 0.1
+        this.coldFaces.forEach(face => {
+            if (face >= 4) xiuScore += 0.08; // Cold face cao sẽ khó ra -> Xỉu
+            else taiScore += 0.08;
+        });
+        
+        return { taiScore, xiuScore, weight: 0.12 };
+    }
+    
+    // ========== 2. FACE TRANSITION MATRIX ==========
+    updateFaceTransition(prevD1, prevD2, prevD3, currD1, currD2, currD3) {
+        // Chuyển tiếp mặt (không phân biệt vị trí)
+        [prevD1, prevD2, prevD3].forEach(prev => {
+            [currD1, currD2, currD3].forEach(curr => {
+                const key = `${prev}->${curr}`;
+                this.faceTransition[key] = (this.faceTransition[key] || 0) + 1;
             });
+        });
+        
+        // Cumulative transition matrix 6x6
+        if (!this.cumulativeTransition[prevD1]) this.cumulativeTransition[prevD1] = {};
+        this.cumulativeTransition[prevD1][currD1] = (this.cumulativeTransition[prevD1][currD1] || 0) + 1;
+        
+        if (!this.cumulativeTransition[prevD2]) this.cumulativeTransition[prevD2] = {};
+        this.cumulativeTransition[prevD2][currD2] = (this.cumulativeTransition[prevD2][currD2] || 0) + 1;
+        
+        if (!this.cumulativeTransition[prevD3]) this.cumulativeTransition[prevD3] = {};
+        this.cumulativeTransition[prevD3][currD3] = (this.cumulativeTransition[prevD3][currD3] || 0) + 1;
+        
+        // Theo vị trí
+        const posKey1 = `${prevD1}->${currD1}`;
+        const posKey2 = `${prevD2}->${currD2}`;
+        const posKey3 = `${prevD3}->${currD3}`;
+        this.positionTransition.d1[posKey1] = (this.positionTransition.d1[posKey1] || 0) + 1;
+        this.positionTransition.d2[posKey2] = (this.positionTransition.d2[posKey2] || 0) + 1;
+        this.positionTransition.d3[posKey3] = (this.positionTransition.d3[posKey3] || 0) + 1;
+    }
+    
+    predictByFaceTransition(lastD1, lastD2, lastD3) {
+        let taiScore = 0, xiuScore = 0;
+        let weight = 0;
+        
+        // Dự đoán từng mặt dựa trên transition
+        [lastD1, lastD2, lastD3].forEach((last, idx) => {
+            const transitions = this.cumulativeTransition[last];
+            if (transitions) {
+                let total = 0, sumHigh = 0;
+                for (let face = 1; face <= 6; face++) {
+                    const count = transitions[face] || 0;
+                    total += count;
+                    if (face >= 4) sumHigh += count;
+                }
+                if (total > 0) {
+                    const probHigh = sumHigh / total;
+                    if (probHigh > 0.55) taiScore += probHigh;
+                    else if (probHigh < 0.45) xiuScore += (1 - probHigh);
+                    weight += 0.05;
+                }
+            }
+        });
+        
+        return { taiScore, xiuScore, weight: weight * 0.8 };
+    }
+    
+    // ========== 3. SUM PROBABILITY & TREND ==========
+    updateSumAnalysis(total) {
+        this.sumFrequency[total] = (this.sumFrequency[total] || 0) + 1;
+        this.sumTrend.push(total);
+        if (this.sumTrend.length > 100) this.sumTrend.shift();
+    }
+    
+    updateSumTransition(prevTotal, currTotal) {
+        const key = `${prevTotal}->${currTotal}`;
+        this.sumTransition[key] = (this.sumTransition[key] || 0) + 1;
+    }
+    
+    predictBySumAnalysis(lastTotal) {
+        let taiScore = 0, xiuScore = 0;
+        let weight = 0;
+        
+        // Từ sum transition
+        const transitions = {};
+        for (let key in this.sumTransition) {
+            if (key.startsWith(`${lastTotal}->`)) {
+                const next = parseInt(key.split('->')[1]);
+                transitions[next] = this.sumTransition[key];
+            }
         }
         
-        // Dự đoán từ Markov score bậc 2
-        if (n >= 2) {
-            const prev2 = history[n-3] || history[0];
-            const key = `${prev2.totalScore}_${prev.totalScore}`;
-            const scoreTransitions = this.markovScore2[key];
+        if (Object.keys(transitions).length > 0) {
+            let total = 0, sumHigh = 0;
+            for (let s in transitions) {
+                total += transitions[s];
+                if (parseInt(s) >= 11) sumHigh += transitions[s];
+            }
+            if (total > 0) {
+                const probTai = sumHigh / total;
+                if (probTai > 0.55) taiScore += probTai;
+                else if (probTai < 0.45) xiuScore += (1 - probTai);
+                weight += 0.1;
+            }
+        }
+        
+        // Trend analysis (moving average)
+        if (this.sumTrend.length >= 10) {
+            const ma5 = this.sumTrend.slice(-5).reduce((a,b) => a+b, 0) / 5;
+            const ma10 = this.sumTrend.slice(-10).reduce((a,b) => a+b, 0) / 10;
+            const momentum = ma5 - ma10;
             
-            if (scoreTransitions && Object.keys(scoreTransitions).length > 0) {
-                let totalCount = 0, taiCount = 0;
-                for (const [score, count] of Object.entries(scoreTransitions)) {
-                    totalCount += count;
-                    if (parseInt(score) >= 11) taiCount += count;
-                }
-                if (totalCount > 0) {
-                    const probTai = taiCount / totalCount;
-                    predictions.push({
-                        predict: probTai > 0.5 ? 'Tài' : 'Xỉu',
-                        confidence: Math.abs(probTai - 0.5) * 2 + 0.4,
-                        source: 'markov_score_2',
-                        weight: 0.08
-                    });
-                }
-            }
+            if (momentum > 1.5) taiScore += 0.08;
+            if (momentum < -1.5) xiuScore += 0.08;
+            weight += 0.05;
         }
         
-        // Dự đoán từ Markov pattern T/X bậc 3
-        if (n >= 3) {
-            const r1 = history[n-3].result === 'Tài' ? 'T' : 'X';
-            const r2 = history[n-2].result === 'Tài' ? 'T' : 'X';
-            const r3 = history[n-1].result === 'Tài' ? 'T' : 'X';
-            const pattern = r1 + r2 + r3;
-            const patternTrans = this.markovPattern3[pattern];
+        return { taiScore, xiuScore, weight };
+    }
+    
+    // ========== 4. PAIR & TRIPLE ANALYSIS ==========
+    updatePairTriple(d1, d2, d3) {
+        // Cặp
+        const pair12 = `${Math.min(d1,d2)}-${Math.max(d1,d2)}`;
+        const pair23 = `${Math.min(d2,d3)}-${Math.max(d2,d3)}`;
+        const pair13 = `${Math.min(d1,d3)}-${Math.max(d1,d3)}`;
+        
+        this.pairFrequency[pair12] = (this.pairFrequency[pair12] || 0) + 1;
+        this.pairFrequency[pair23] = (this.pairFrequency[pair23] || 0) + 1;
+        this.pairFrequency[pair13] = (this.pairFrequency[pair13] || 0) + 1;
+        
+        // Bộ ba
+        const triple = `${d1}${d2}${d3}`;
+        this.tripleFrequency[triple] = (this.tripleFrequency[triple] || 0) + 1;
+        
+        // Số mặt trùng
+        const doubles = (d1 === d2 ? 1 : 0) + (d2 === d3 ? 1 : 0) + (d1 === d3 ? 1 : 0);
+        this.doubleFrequency[doubles]++;
+    }
+    
+    predictByPairTriple(lastD1, lastD2, lastD3) {
+        let taiScore = 0, xiuScore = 0;
+        let weight = 0;
+        
+        // Dựa vào cặp cuối cùng
+        const lastPair12 = `${Math.min(lastD1,lastD2)}-${Math.max(lastD1,lastD2)}`;
+        const lastPair23 = `${Math.min(lastD2,lastD3)}-${Math.max(lastD2,lastD3)}`;
+        
+        // Tìm các bộ ba có chứa cặp này
+        let sumHigh = 0, sumLow = 0;
+        for (let triple in this.tripleFrequency) {
+            const d = triple.split('').map(Number);
+            const hasPair12 = (Math.min(d[0],d[1]) === Math.min(lastD1,lastD2) && 
+                               Math.max(d[0],d[1]) === Math.max(lastD1,lastD2));
+            const hasPair23 = (Math.min(d[1],d[2]) === Math.min(lastD2,lastD3) && 
+                               Math.max(d[1],d[2]) === Math.max(lastD2,lastD3));
             
-            if (patternTrans && (patternTrans.T + patternTrans.X) > 0) {
-                const probT = patternTrans.T / (patternTrans.T + patternTrans.X);
-                predictions.push({
-                    predict: probT > 0.5 ? 'Tài' : 'Xỉu',
-                    confidence: Math.abs(probT - 0.5) * 2 + 0.3,
-                    source: 'markov_pattern_3',
-                    weight: 0.12
-                });
+            if (hasPair12 || hasPair23) {
+                const sum = d[0] + d[1] + d[2];
+                if (sum >= 11) sumHigh += this.tripleFrequency[triple];
+                else sumLow += this.tripleFrequency[triple];
             }
         }
         
-        return predictions;
-    }
-    
-    getMostLikelyNext(transitions) {
-        if (!transitions) return null;
-        let maxCount = 0;
-        let bestValue = null;
-        let total = 0;
-        
-        for (let i = 1; i <= 6; i++) {
-            total += transitions[i] || 0;
-            if ((transitions[i] || 0) > maxCount) {
-                maxCount = transitions[i] || 0;
-                bestValue = i;
-            }
+        const total = sumHigh + sumLow;
+        if (total > 2) {
+            const probTai = sumHigh / total;
+            if (probTai > 0.55) taiScore += probTai;
+            else if (probTai < 0.45) xiuScore += (1 - probTai);
+            weight += 0.08;
         }
         
-        if (total === 0 || !bestValue) return null;
-        return { value: bestValue, prob: maxCount / total };
-    }
-}
-
-// ================= NÂNG CẤP: PATTERN CLUSTER ENGINE =================
-class PatternClusterEngine {
-    constructor() {
-        this.patterns = {}; // Lưu các mẫu pattern và kết quả tiếp theo
-        this.clusterMemory = {}; // Gom nhóm các pattern tương tự
+        return { taiScore, xiuScore, weight };
     }
     
-    extractPattern(history, length) {
-        if (!history || history.length < length + 1) return null;
-        const results = history.map(h => h.result === 'Tài' ? 'T' : 'X');
-        return results.slice(-length - 1).join('');
-    }
-    
-    update(history) {
-        if (!history || history.length < 5) return;
-        const n = history.length;
-        const results = history.map(h => h.result === 'Tài' ? 'T' : 'X');
+    // ========== 5. SEQUENCE ANALYSIS ==========
+    updateSequence(d1, d2, d3) {
+        this.diceSequence.push({ d1, d2, d3 });
+        if (this.diceSequence.length > 200) this.diceSequence.shift();
         
-        // Học pattern từ độ dài 3 đến 10
-        for (let len = 3; len <= 10; len++) {
-            if (n > len) {
-                const pattern = results.slice(-len - 1, -1).join('');
-                const next = results[n-1];
-                
-                if (!this.patterns[len]) this.patterns[len] = {};
-                if (!this.patterns[len][pattern]) {
-                    this.patterns[len][pattern] = {T: 0, X: 0, total: 0};
-                }
-                this.patterns[len][pattern][next]++;
-                this.patterns[len][pattern].total++;
-                
-                // Phân cụm pattern tương tự
-                this.clusterSimilar(pattern, len);
-            }
+        // Phát hiện pattern trong sequence (dice pattern, không phải cầu TX)
+        if (this.diceSequence.length >= 3) {
+            const last3 = this.diceSequence.slice(-3);
+            const patternKey = last3.map(s => `${s.d1}${s.d2}${s.d3}`).join('|');
+            this.sequencePatterns[patternKey] = (this.sequencePatterns[patternKey] || 0) + 1;
         }
     }
     
-    clusterSimilar(pattern, len) {
-        // Gom các pattern có độ tương đồng cao (cùng kết thúc)
-        const suffix = pattern.slice(-3);
-        if (!this.clusterMemory[suffix]) {
-            this.clusterMemory[suffix] = { patterns: [], nextT: 0, nextX: 0 };
-        }
-        if (!this.clusterMemory[suffix].patterns.includes(pattern)) {
-            this.clusterMemory[suffix].patterns.push(pattern);
-        }
-    }
-    
-    predict(history) {
-        const predictions = [];
-        const n = history.length;
-        if (n < 5) return predictions;
+    predictBySequence() {
+        let taiScore = 0, xiuScore = 0;
         
-        const results = history.map(h => h.result === 'Tài' ? 'T' : 'X');
-        
-        // Dự đoán từ pattern khớp chính xác
-        for (let len = 10; len >= 3; len--) {
-            if (n >= len) {
-                const currentPattern = results.slice(-len).join('');
-                const patternData = this.patterns[len]?.[currentPattern];
-                
-                if (patternData && patternData.total >= 3) {
-                    const probT = patternData.T / patternData.total;
-                    predictions.push({
-                        predict: probT > 0.5 ? 'Tài' : 'Xỉu',
-                        confidence: Math.abs(probT - 0.5) * 2 + 0.3,
-                        source: `pattern_exact_${len}`,
-                        weight: 0.02 * len
-                    });
-                    break; // Ưu tiên pattern dài nhất
-                }
-            }
-        }
-        
-        // Dự đoán từ cluster pattern tương tự
-        const currentSuffix = results.slice(-3).join('');
-        const cluster = this.clusterMemory[currentSuffix];
-        if (cluster && cluster.patterns.length > 1) {
-            // Gom tất cả kết quả tiếp theo từ các pattern trong cluster
-            let clusterT = 0, clusterX = 0;
-            for (const pat of cluster.patterns) {
-                for (let len = 3; len <= 10; len++) {
-                    const patData = this.patterns[len]?.[pat];
-                    if (patData) {
-                        clusterT += patData.T;
-                        clusterX += patData.X;
+        // Tìm pattern sequence gần nhất
+        if (this.diceSequence.length >= 4) {
+            const last2 = this.diceSequence.slice(-2);
+            const last2Key = last2.map(s => `${s.d1}${s.d2}${s.d3}`).join('|');
+            
+            let sumHigh = 0, sumLow = 0;
+            for (let pattern in this.sequencePatterns) {
+                if (pattern.startsWith(last2Key)) {
+                    const nextTriple = pattern.split('|')[2];
+                    if (nextTriple) {
+                        const sum = nextTriple.split('').map(Number).reduce((a,b) => a+b, 0);
+                        if (sum >= 11) sumHigh += this.sequencePatterns[pattern];
+                        else sumLow += this.sequencePatterns[pattern];
                     }
                 }
             }
             
-            if (clusterT + clusterX > 5) {
-                const probT = clusterT / (clusterT + clusterX);
-                predictions.push({
-                    predict: probT > 0.5 ? 'Tài' : 'Xỉu',
-                    confidence: Math.abs(probT - 0.5) * 2 + 0.2,
-                    source: 'cluster_similar',
-                    weight: 0.06
-                });
+            const total = sumHigh + sumLow;
+            if (total > 1) {
+                const probTai = sumHigh / total;
+                if (probTai > 0.6) taiScore += probTai;
+                else if (probTai < 0.4) xiuScore += (1 - probTai);
+                return { taiScore, xiuScore, weight: 0.07 };
             }
         }
+        
+        return { taiScore, xiuScore, weight: 0.03 };
+    }
+    
+    // ========== 6. STATISTICAL METRICS ==========
+    updateStatistics(d1, d2, d3, total) {
+        const n = this.diceSequence.length;
+        if (n === 0) {
+            this.meanDice = { d1, d2, d3, total };
+            return;
+        }
+        
+        // Cập nhật mean
+        this.meanDice.d1 = (this.meanDice.d1 * (n-1) + d1) / n;
+        this.meanDice.d2 = (this.meanDice.d2 * (n-1) + d2) / n;
+        this.meanDice.d3 = (this.meanDice.d3 * (n-1) + d3) / n;
+        this.meanDice.total = (this.meanDice.total * (n-1) + total) / n;
+        
+        // Cập nhật variance (online algorithm)
+        if (n === 1) {
+            this.varianceDice = { d1: 0, d2: 0, d3: 0, total: 0 };
+        } else {
+            const oldMean = this.meanDice;
+            this.varianceDice.d1 = ((n-2) * this.varianceDice.d1 + (d1 - oldMean.d1) * (d1 - this.meanDice.d1)) / (n-1);
+            this.varianceDice.d2 = ((n-2) * this.varianceDice.d2 + (d2 - oldMean.d2) * (d2 - this.meanDice.d2)) / (n-1);
+            this.varianceDice.d3 = ((n-2) * this.varianceDice.d3 + (d3 - oldMean.d3) * (d3 - this.meanDice.d3)) / (n-1);
+            this.varianceDice.total = ((n-2) * this.varianceDice.total + (total - oldMean.total) * (total - this.meanDice.total)) / (n-1);
+        }
+    }
+    
+    predictByStatistics() {
+        let taiScore = 0, xiuScore = 0;
+        let weight = 0.06;
+        
+        // Mean deviation
+        if (this.meanDice.total > 11) {
+            taiScore += 0.05;
+        } else if (this.meanDice.total < 10) {
+            xiuScore += 0.05;
+        }
+        
+        // Variance (độ phân tán)
+        if (this.varianceDice.total > 12) {
+            // Variance cao -> khó đoán, giảm confidence
+            weight *= 0.7;
+        }
+        
+        return { taiScore, xiuScore, weight };
+    }
+    
+    // ========== 7. NAIVE BAYES PREDICTION ==========
+    updateNaiveBayes(prevD1, prevD2, prevD3, currD1, currD2, currD3) {
+        // P(current | previous)
+        const key = `${prevD1},${prevD2},${prevD3}`;
+        if (!this.naiveBayes[key]) {
+            this.naiveBayes[key] = { counts: {}, total: 0 };
+        }
+        const nextKey = `${currD1},${currD2},${currD3}`;
+        this.naiveBayes[key].counts[nextKey] = (this.naiveBayes[key].counts[nextKey] || 0) + 1;
+        this.naiveBayes[key].total++;
+    }
+    
+    predictByNaiveBayes(lastD1, lastD2, lastD3) {
+        const key = `${lastD1},${lastD2},${lastD3}`;
+        const model = this.naiveBayes[key];
+        
+        if (!model || model.total < 3) {
+            return { taiScore: 0, xiuScore: 0, weight: 0 };
+        }
+        
+        let taiScore = 0, xiuScore = 0;
+        for (let next in model.counts) {
+            const dice = next.split(',').map(Number);
+            const sum = dice[0] + dice[1] + dice[2];
+            const prob = model.counts[next] / model.total;
+            
+            if (sum >= 11) taiScore += prob;
+            else xiuScore += prob;
+        }
+        
+        return { taiScore, xiuScore, weight: 0.1 };
+    }
+    
+    // ========== MAIN PREDICTION METHOD ==========
+    getAllDicePredictions(lastD1, lastD2, lastD3, lastTotal) {
+        const predictions = [];
+        
+        // 1. Face distribution
+        predictions.push(this.predictByFaceDistribution());
+        
+        // 2. Face transition
+        predictions.push(this.predictByFaceTransition(lastD1, lastD2, lastD3));
+        
+        // 3. Sum analysis
+        predictions.push(this.predictBySumAnalysis(lastTotal));
+        
+        // 4. Pair & Triple
+        predictions.push(this.predictByPairTriple(lastD1, lastD2, lastD3));
+        
+        // 5. Sequence pattern
+        predictions.push(this.predictBySequence());
+        
+        // 6. Statistics
+        predictions.push(this.predictByStatistics());
+        
+        // 7. Naive Bayes
+        predictions.push(this.predictByNaiveBayes(lastD1, lastD2, lastD3));
         
         return predictions;
     }
 }
 
-// ================= NÂNG CẤP: ANTI-CHEAT DETECTION ENGINE =================
-class AntiCheatEngine {
-    constructor() {
-        this.trustScores = {};
-        this.anomalyLog = {};
-        this.recentDataHashes = {};
-        this.lastCheckTime = {};
-        
-        // Ngưỡng cảnh báo
-        this.THRESHOLD_TRUST_LOW = 30;
-        this.THRESHOLD_FACE_DEVIATION = 0.15; // Độ lệch tần suất mặt xúc xắc
-        this.THRESHOLD_AUTOCORR = 0.3; // Tự tương quan
-        this.CHECK_INTERVAL = 10; // Kiểm tra mỗi 10 phiên
-    }
-    
-    initGame(gameId) {
-        if (!this.trustScores[gameId]) {
-            this.trustScores[gameId] = 100;
-            this.anomalyLog[gameId] = [];
-            this.lastCheckTime[gameId] = 0;
-        }
-    }
-    
-    /**
-     * Kiểm tra tính toàn vẹn dữ liệu
-     */
-    checkDataIntegrity(gameId, data, sessionId) {
-        const issues = [];
-        
-        // 1. Kiểm tra hash dữ liệu (phát hiện replay)
-        const dataStr = JSON.stringify(data);
-        const dataHash = crypto.createHash('md5').update(dataStr).digest('hex');
-        
-        if (this.recentDataHashes[gameId]) {
-            const recent = this.recentDataHashes[gameId];
-            if (recent.includes(dataHash)) {
-                issues.push({
-                    type: 'REPLAY_DETECTED',
-                    severity: 'HIGH',
-                    detail: 'Dữ liệu trùng lặp với phiên trước - nghi ngờ replay attack'
-                });
-                this.trustScores[gameId] = Math.max(0, this.trustScores[gameId] - 30);
-            }
-            
-            // Lưu hash mới, giữ tối đa 50 hash gần nhất
-            recent.push(dataHash);
-            if (recent.length > 50) recent.shift();
-        } else {
-            this.recentDataHashes[gameId] = [dataHash];
-        }
-        
-        // 2. Kiểm tra session ID lộn xộn
-        if (sessionId && this.lastProcessedSession[gameId]) {
-            if (sessionId < this.lastProcessedSession[gameId]) {
-                issues.push({
-                    type: 'SESSION_ID_ANOMALY',
-                    severity: 'MEDIUM',
-                    detail: `Session ID lùi: ${sessionId} < ${this.lastProcessedSession[gameId]}`
-                });
-                this.trustScores[gameId] = Math.max(0, this.trustScores[gameId] - 15);
-            }
-        }
-        
-        return issues;
-    }
-    
-    /**
-     * Kiểm định thống kê tính ngẫu nhiên
-     */
-    statisticalAudit(gameId, history) {
-        const issues = [];
-        const n = history.length;
-        if (n < 50) return { issues, trustChange: 0 }; // Chưa đủ dữ liệu
-        
-        const recent50 = history.slice(-50);
-        
-        // 1. Kiểm tra phân phối mặt xúc xắc (Chi-Square test)
-        const faceFreq = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0};
-        recent50.forEach(h => {
-            faceFreq[h.d1]++; faceFreq[h.d2]++; faceFreq[h.d3]++;
-        });
-        const totalFaces = 150; // 50 phiên * 3 viên
-        const expectedFreq = totalFaces / 6; // 25
-        
-        let chiSquareFaces = 0;
-        for (let i = 1; i <= 6; i++) {
-            const observed = faceFreq[i] || 0;
-            chiSquareFaces += Math.pow(observed - expectedFreq, 2) / expectedFreq;
-        }
-        
-        // Chi-square critical value for df=5, alpha=0.05 is ~11.07
-        if (chiSquareFaces > 11.07) {
-            issues.push({
-                type: 'FACE_DISTRIBUTION_BIASED',
-                severity: 'MEDIUM',
-                detail: `Phân phối mặt xúc xắc bất thường (Chi2=${chiSquareFaces.toFixed(2)})`,
-                data: faceFreq
-            });
-            this.trustScores[gameId] = Math.max(0, this.trustScores[gameId] - 20);
-        }
-        
-        // 2. Kiểm tra phân phối T/X (50/50 gần đúng)
-        const taiCount = recent50.filter(h => h.result === 'Tài').length;
-        const taiRatio = taiCount / 50;
-        if (Math.abs(taiRatio - 0.5) > 0.2) {
-            issues.push({
-                type: 'TX_DISTRIBUTION_BIASED',
-                severity: 'LOW',
-                detail: `Tỷ lệ T/X lệch: ${(taiRatio*100).toFixed(1)}% Tài`
-            });
-            this.trustScores[gameId] = Math.max(0, this.trustScores[gameId] - 10);
-        }
-        
-        // 3. Kiểm tra Runs Test (tính độc lập)
-        const results = recent50.map(h => h.result === 'Tài' ? 1 : 0);
-        let runs = 1;
-        for (let i = 1; i < results.length; i++) {
-            if (results[i] !== results[i-1]) runs++;
-        }
-        
-        const n1 = results.filter(r => r === 1).length; // Số Tài
-        const n2 = results.length - n1; // Số Xỉu
-        const expectedRuns = (2 * n1 * n2) / (n1 + n2) + 1;
-        const stdRuns = Math.sqrt((2 * n1 * n2 * (2 * n1 * n2 - n1 - n2)) / 
-                                  (Math.pow(n1 + n2, 2) * (n1 + n2 - 1)));
-        
-        if (stdRuns > 0) {
-            const zScore = (runs - expectedRuns) / stdRuns;
-            if (Math.abs(zScore) > 2.58) { // 99% confidence
-                issues.push({
-                    type: 'RUNS_TEST_FAILED',
-                    severity: 'HIGH',
-                    detail: `Chuỗi không độc lập (z=${zScore.toFixed(2)})`
-                });
-                this.trustScores[gameId] = Math.max(0, this.trustScores[gameId] - 25);
-            }
-        }
-        
-        // 4. Kiểm tra tự tương quan (Autocorrelation) lag-1
-        if (recent50.length >= 2) {
-            const scores = recent50.map(h => h.totalScore);
-            const mean = scores.reduce((a,b) => a+b, 0) / scores.length;
-            let num = 0, den = 0;
-            
-            for (let i = 1; i < scores.length; i++) {
-                num += (scores[i] - mean) * (scores[i-1] - mean);
-            }
-            for (let i = 0; i < scores.length; i++) {
-                den += Math.pow(scores[i] - mean, 2);
-            }
-            
-            const autocorr = den > 0 ? num / den : 0;
-            if (Math.abs(autocorr) > this.THRESHOLD_AUTOCORR) {
-                issues.push({
-                    type: 'HIGH_AUTOCORRELATION',
-                    severity: 'MEDIUM',
-                    detail: `Tự tương quan cao (r=${autocorr.toFixed(3)})`
-                });
-                this.trustScores[gameId] = Math.max(0, this.trustScores[gameId] - 15);
-            }
-        }
-        
-        // 5. Kiểm tra entropy của chuỗi kết quả
-        const entropy = this.calculateEntropy(results);
-        const maxEntropy = Math.log2(2); // 1.0 cho binary
-        if (entropy < maxEntropy * 0.7) { // Entropy quá thấp
-            issues.push({
-                type: 'LOW_ENTROPY',
-                severity: 'HIGH',
-                detail: `Entropy thấp (${entropy.toFixed(3)}/${maxEntropy.toFixed(3)}) - Dữ liệu có thể bị thao túng`
-            });
-            this.trustScores[gameId] = Math.max(0, this.trustScores[gameId] - 25);
-        }
-        
-        // Giới hạn trust score
-        this.trustScores[gameId] = Math.min(100, this.trustScores[gameId]);
-        
-        return {
-            issues,
-            trustScore: this.trustScores[gameId],
-            metrics: {
-                chiSquareFaces: chiSquareFaces.toFixed(2),
-                taiRatio: (taiRatio * 100).toFixed(1) + '%',
-                runs,
-                expectedRuns: expectedRuns.toFixed(1),
-                autocorr: autocorr ? autocorr.toFixed(3) : 'N/A',
-                entropy: entropy.toFixed(3)
-            }
-        };
-    }
-    
-    calculateEntropy(binaryArray) {
-        const count1 = binaryArray.filter(x => x === 1).length;
-        const count0 = binaryArray.length - count1;
-        const p1 = count1 / binaryArray.length;
-        const p0 = count0 / binaryArray.length;
-        
-        let entropy = 0;
-        if (p1 > 0) entropy -= p1 * Math.log2(p1);
-        if (p0 > 0) entropy -= p0 * Math.log2(p0);
-        return entropy;
-    }
-    
-    /**
-     * Đánh giá tổng thể và quyết định có nên dự đoán không
-     */
-    shouldPredict(gameId) {
-        return this.trustScores[gameId] >= this.THRESHOLD_TRUST_LOW;
-    }
-    
-    /**
-     * Phục hồi trust score từ từ nếu không có vấn đề
-     */
-    recoverTrust(gameId) {
-        if (this.trustScores[gameId] < 100) {
-            this.trustScores[gameId] = Math.min(100, this.trustScores[gameId] + 2);
-        }
-    }
-    
-    getTrustStatus(gameId) {
-        const score = this.trustScores[gameId] || 100;
-        if (score >= 70) return 'GOOD';
-        if (score >= 30) return 'WARNING';
-        return 'CRITICAL';
-    }
+// ================= MAIN SERVER =================
+let gameCache = {};
+let gameHistory = {};
+let predictionHistory = {};
+let lastProcessedSession = {};
+let pendingPredictions = {};
+let diceEngines = {}; // Mỗi game có dice engine riêng
+
+// Các biến cho thuật toán cầu (giữ nguyên)
+let cauMemoryBank = {
+    biet: { Tai: {}, Xiu: {}, stats: { maxTai: 0, maxXiu: 0, avgTai: 0, avgXiu: 0, totalBietTai: 0, totalBietXiu: 0 } },
+    c11: { patterns: {}, stats: { total: 0 } },
+    c22: { patterns: {}, stats: { total: 0 } }
+};
+
+let patternMemoryBank = { patternNext: {} };
+let scoreMemoryBank = { afterScore: {}, afterScoreResult: {}, movingAvg: { MA5: [], MA10: [], MA20: [] } };
+let totalPredictions = 0, totalCorrect = 0;
+
+// Khởi tạo
+function initGame(gameId) {
+    if (!gameHistory[gameId]) gameHistory[gameId] = [];
+    if (!predictionHistory[gameId]) predictionHistory[gameId] = [];
+    if (!lastProcessedSession[gameId]) lastProcessedSession[gameId] = null;
+    if (!pendingPredictions[gameId]) pendingPredictions[gameId] = null;
+    if (!diceEngines[gameId]) diceEngines[gameId] = new DiceAlgorithms();
 }
 
-// ================= KHỞI TẠO CÁC ENGINE =================
-const diceGraphEngine = new DiceGraphEngine();
-const patternClusterEngine = new PatternClusterEngine();
-const antiCheatEngine = new AntiCheatEngine();
-
-// ================= HÀM TIỆN ÍCH =================
 async function fetchData(url) {
     try {
         const response = await axios.get(url, { timeout: 10000 });
@@ -639,263 +493,237 @@ async function fetchData(url) {
     }
 }
 
-async function fetchAndCache(gameId) {
+async function getCachedData(gameId) {
     const config = GAME_CONFIG[gameId];
     if (!config) return null;
+    if (gameCache[gameId]) return gameCache[gameId].data;
+    
     const data = await fetchData(config.api_url);
-    if (data) {
-        gameCache[gameId] = { data, ts: new Date().toISOString() };
-    }
+    if (data) gameCache[gameId] = { data, ts: Date.now() };
     return data;
 }
 
-async function getCachedData(gameId) {
-    if (gameCache[gameId]) return gameCache[gameId].data;
-    return await fetchAndCache(gameId);
-}
-
 function parseSession(item, gameType) {
-    let result = null, point = 0, dices = [0, 0, 0], sessionId = null;
-    
     if (gameType === "legacy") {
         const resultRaw = (item.resultTruyenThong || "").toUpperCase();
-        result = resultRaw.includes("TAI") ? "T" : resultRaw.includes("XIU") ? "X" : null;
-        point = item.point || 0;
-        dices = item.dices || [0, 0, 0];
-        sessionId = item.id;
+        const result = resultRaw.includes("TAI") ? "Tài" : resultRaw.includes("XIU") ? "Xỉu" : null;
+        const point = item.point || 0;
+        const dices = item.dices || [0, 0, 0];
+        const sessionId = item.id;
+        return { result, point, dices, sessionId };
     }
-    return { result, point, dices, sessionId };
+    return { result: null, point: 0, dices: [0,0,0], sessionId: null };
 }
 
-// ================= HÀM KHỞI TẠO & CẬP NHẬT =================
-function initGameHistory(gameId) {
-    if (!gameHistory[gameId]) {
-        gameHistory[gameId] = [];
+// Các hàm cầu (giữ nguyên từ code cũ)
+function updateCauMemory(gameId, result) {
+    let n = gameHistory[gameId] ? gameHistory[gameId].length : 0;
+    if (n < 3) return;
+    
+    let results = gameHistory[gameId].map(h => h.result);
+    let streak = 1;
+    for (let i = n - 2; i >= 0; i--) {
+        if (results[i] === result) streak++;
+        else break;
     }
-    if (!predictionHistory[gameId]) {
-        predictionHistory[gameId] = [];
+    if (streak >= 3) {
+        if (result === 'Tài') {
+            cauMemoryBank.biet.Tai[streak] = (cauMemoryBank.biet.Tai[streak] || 0) + 1;
+            cauMemoryBank.biet.stats.totalBietTai++;
+            if (streak > cauMemoryBank.biet.stats.maxTai) cauMemoryBank.biet.stats.maxTai = streak;
+        } else {
+            cauMemoryBank.biet.Xiu[streak] = (cauMemoryBank.biet.Xiu[streak] || 0) + 1;
+            cauMemoryBank.biet.stats.totalBietXiu++;
+            if (streak > cauMemoryBank.biet.stats.maxXiu) cauMemoryBank.biet.stats.maxXiu = streak;
+        }
     }
-    if (!lastProcessedSession[gameId]) {
-        lastProcessedSession[gameId] = null;
+}
+
+function updatePatternMemory(gameId, result) {
+    let n = gameHistory[gameId] ? gameHistory[gameId].length : 0;
+    if (n < 3) return;
+    
+    let r = result === 'Tài' ? 'T' : 'X';
+    let results = gameHistory[gameId].map(h => h.result === 'Tài' ? 'T' : 'X');
+    
+    for (let len of [3, 4, 5, 6, 7, 8]) {
+        if (n > len) {
+            let pattern = results.slice(-len - 1, -1).join('');
+            let nextKey = pattern + '->' + r;
+            patternMemoryBank.patternNext[nextKey] = (patternMemoryBank.patternNext[nextKey] || 0) + 1;
+        }
     }
-    antiCheatEngine.initGame(gameId);
+}
+
+function updateScoreMemory(gameId, total, result) {
+    let n = gameHistory[gameId] ? gameHistory[gameId].length : 0;
+    if (n >= 2) {
+        let prevScore = gameHistory[gameId][n - 2].totalScore;
+        if (!scoreMemoryBank.afterScore[prevScore]) {
+            scoreMemoryBank.afterScore[prevScore] = {};
+            for (let i = 3; i <= 18; i++) scoreMemoryBank.afterScore[prevScore][i] = 0;
+        }
+        scoreMemoryBank.afterScore[prevScore][total]++;
+        if (!scoreMemoryBank.afterScoreResult[prevScore]) {
+            scoreMemoryBank.afterScoreResult[prevScore] = { Tai: 0, Xiu: 0 };
+        }
+        scoreMemoryBank.afterScoreResult[prevScore][result]++;
+    }
 }
 
 function addSession(gameId, session, result, totalScore, d1, d2, d3) {
-    if (!gameHistory[gameId]) {
-        gameHistory[gameId] = [];
-    }
+    if (!gameHistory[gameId]) gameHistory[gameId] = [];
     
     gameHistory[gameId].push({ session, result, totalScore, d1, d2, d3, timestamp: Date.now() });
+    if (gameHistory[gameId].length > 500) gameHistory[gameId] = gameHistory[gameId].slice(-400);
     
-    if (gameHistory[gameId].length > 1000) {
-        gameHistory[gameId] = gameHistory[gameId].slice(-500);
+    // Cập nhật dice engine
+    const diceEngine = diceEngines[gameId];
+    diceEngine.updateFaceDistribution(d1, d2, d3);
+    diceEngine.updateSumAnalysis(totalScore);
+    diceEngine.updatePairTriple(d1, d2, d3);
+    diceEngine.updateSequence(d1, d2, d3);
+    diceEngine.updateStatistics(d1, d2, d3, totalScore);
+    
+    // Cập nhật transition nếu có đủ dữ liệu
+    if (gameHistory[gameId].length >= 2) {
+        const prev = gameHistory[gameId][gameHistory[gameId].length - 2];
+        diceEngine.updateFaceTransition(prev.d1, prev.d2, prev.d3, d1, d2, d3);
+        diceEngine.updateSumTransition(prev.totalScore, totalScore);
+        diceEngine.updateNaiveBayes(prev.d1, prev.d2, prev.d3, d1, d2, d3);
     }
     
-    // Cập nhật các engine
-    diceGraphEngine.update(gameHistory[gameId]);
-    patternClusterEngine.update(gameHistory[gameId]);
+    // Các thuật toán cầu cũ
+    updateCauMemory(gameId, result);
+    updatePatternMemory(gameId, result);
+    updateScoreMemory(gameId, totalScore, result);
 }
 
-// ================= DỰ ĐOÁN NÂNG CAO =================
-function predictAdvanced(gameId) {
-    const history = gameHistory[gameId];
-    if (!history || history.length < 10) {
-        return { prediction: 'CHO', confidence: 0, reason: 'Chưa đủ dữ liệu (cần >= 10 phiên)' };
+// Hàm dự đoán kết hợp CẦU + DICE
+function predictSuper(gameId) {
+    let n = gameHistory[gameId] ? gameHistory[gameId].length : 0;
+    
+    if (n < 10) {
+        return { prediction: Math.random() < 0.5 ? 'Tài' : 'Xỉu', confidence: 50, reason: 'Đang thu thập dữ liệu...' };
     }
     
-    // Kiểm tra Anti-Cheat
-    if (!antiCheatEngine.shouldPredict(gameId)) {
-        return { 
-            prediction: 'CHO', 
-            confidence: 0, 
-            reason: `Trust Score thấp (${antiCheatEngine.trustScores[gameId]}) - Nghi ngờ dữ liệu không ngẫu nhiên` 
-        };
-    }
-    
-    const features = FeatureExtractor.extractFeatures(history);
-    if (!features) {
-        return { prediction: 'CHO', confidence: 0, reason: 'Không thể trích xuất đặc trưng' };
-    }
+    const diceEngine = diceEngines[gameId];
+    const last = gameHistory[gameId][n - 1];
+    const lastResult = last.result;
+    const lastTotal = last.totalScore;
+    const lastD1 = last.d1, lastD2 = last.d2, lastD3 = last.d3;
     
     let predictions = [];
+    let taiScore = 0, xiuScore = 0, totalWeight = 0;
     
-    // 1. Dự đoán từ Dice Graph Engine (Markov)
-    const markovPredictions = diceGraphEngine.predictNext(history);
-    predictions.push(...markovPredictions);
+    // ========== PHẦN 1: THUẬT TOÁN DICE (MỚI) ==========
+    const dicePredictions = diceEngine.getAllDicePredictions(lastD1, lastD2, lastD3, lastTotal);
     
-    // 2. Dự đoán từ Pattern Cluster Engine
-    const patternPredictions = patternClusterEngine.predict(history);
-    predictions.push(...patternPredictions);
-    
-    // 3. Dự đoán từ phân tích xu hướng T/X
-    const trendPrediction = predictFromTrend(features);
-    predictions.push(trendPrediction);
-    
-    // 4. Dự đoán từ phân tích xúc xắc chi tiết
-    const diceDetailPrediction = predictFromDiceDetails(features, history);
-    predictions.push(diceDetailPrediction);
-    
-    // 5. Dự đoán từ biến động
-    const volatilityPrediction = predictFromVolatility(features);
-    predictions.push(volatilityPrediction);
-    
-    // 6. Dự đoán từ streak hiện tại
-    const streakPrediction = predictFromStreak(features, history);
-    predictions.push(streakPrediction);
-    
-    // Tổng hợp dự đoán với trọng số
-    let weightedTai = 0, weightedXiu = 0, totalWeight = 0;
-    
-    for (const pred of predictions) {
-        if (pred.predict === 'CHO') continue;
-        const w = pred.weight * pred.confidence;
-        if (pred.predict === 'Tài') weightedTai += w;
-        else if (pred.predict === 'Xỉu') weightedXiu += w;
-        totalWeight += w;
+    for (const pred of dicePredictions) {
+        if (pred.weight > 0) {
+            taiScore += pred.taiScore;
+            xiuScore += pred.xiuScore;
+            totalWeight += pred.weight;
+        }
     }
     
+    // ========== PHẦN 2: THUẬT TOÁN CẦU (GIỮ NGUYÊN) ==========
+    
+    // Pattern prediction từ cầu
+    let results = gameHistory[gameId].map(h => h.result === 'Tài' ? 'T' : 'X');
+    for (let len of [3, 4, 5, 6]) {
+        if (n >= len) {
+            let pattern = results.slice(-len).join('');
+            let nextT = patternMemoryBank.patternNext[pattern + '->T'] || 0;
+            let nextX = patternMemoryBank.patternNext[pattern + '->X'] || 0;
+            let total = nextT + nextX;
+            if (total >= 2) {
+                let probT = nextT / total;
+                if (probT > 0.55) {
+                    taiScore += probT * 0.1;
+                    totalWeight += 0.1;
+                } else if (probT < 0.45) {
+                    xiuScore += (1 - probT) * 0.1;
+                    totalWeight += 0.1;
+                }
+            }
+        }
+    }
+    
+    // Bệt cầu
+    let streak = 1;
+    for (let i = n - 2; i >= 0; i--) {
+        if (gameHistory[gameId][i].result === lastResult) streak++;
+        else break;
+    }
+    if (streak >= 3) {
+        let countLonger = 0;
+        for (let s = streak + 1; s <= Math.min(50, cauMemoryBank.biet.stats['max' + lastResult] || 50); s++) {
+            countLonger += lastResult === 'Tài' ? (cauMemoryBank.biet.Tai[s] || 0) : (cauMemoryBank.biet.Xiu[s] || 0);
+        }
+        let countThis = lastResult === 'Tài' ? (cauMemoryBank.biet.Tai[streak] || 0) : (cauMemoryBank.biet.Xiu[streak] || 0);
+        let total = countThis + countLonger;
+        if (total > 0) {
+            let probContinue = countLonger / total;
+            if (probContinue > 0.5) {
+                if (lastResult === 'Tài') taiScore += 0.12;
+                else xiuScore += 0.12;
+            } else {
+                if (lastResult === 'Tài') xiuScore += 0.12;
+                else taiScore += 0.12;
+            }
+            totalWeight += 0.12;
+        }
+    }
+    
+    // Bẻ cầu khi bệt quá dài
+    if (streak >= 7) {
+        if (lastResult === 'Tài') xiuScore += 0.15;
+        else taiScore += 0.15;
+        totalWeight += 0.1;
+    }
+    
+    // Score prediction
+    if (n >= 2 && scoreMemoryBank.afterScore[lastTotal]) {
+        let after = scoreMemoryBank.afterScore[lastTotal];
+        let totalAfter = 0, taiAfter = 0;
+        for (let s = 3; s <= 18; s++) {
+            totalAfter += after[s] || 0;
+            if (s >= 11) taiAfter += after[s] || 0;
+        }
+        if (totalAfter >= 3) {
+            let probT = taiAfter / totalAfter;
+            if (probT > 0.55) taiScore += 0.08;
+            else if (probT < 0.45) xiuScore += 0.08;
+            totalWeight += 0.08;
+        }
+    }
+    
+    // Tổng hợp
     if (totalWeight === 0) {
-        return { prediction: 'CHO', confidence: 0, reason: 'Không đủ tín hiệu dự đoán' };
+        return { prediction: 'CHO', confidence: 0, reason: 'Chưa đủ tín hiệu' };
     }
     
-    const probTai = weightedTai / totalWeight;
+    let probTai = taiScore / totalWeight;
     
-    // Nếu tín hiệu quá yếu -> CHO
-    if (Math.abs(probTai - 0.5) < 0.05) {
+    if (Math.abs(probTai - 0.5) < 0.04) {
         return { prediction: 'CHO', confidence: 0, reason: 'Tín hiệu quá yếu' };
     }
     
-    const finalPrediction = probTai > 0.5 ? 'Tài' : 'Xỉu';
-    const confidence = Math.round(Math.min(95, Math.max(55, Math.abs(probTai - 0.5) * 2 * 100)));
+    let finalPrediction = probTai > 0.5 ? 'Tài' : 'Xỉu';
+    let confidence = Math.min(95, Math.max(60, Math.round(Math.abs(probTai - 0.5) * 2 * 100)));
     
-    const topSources = predictions
-        .filter(p => p.predict !== 'CHO')
-        .sort((a, b) => b.weight * b.confidence - a.weight * a.confidence)
-        .slice(0, 3);
+    // Lấy thông tin dice engine stats để hiển thị
+    const diceEngineStats = diceEngines[gameId];
+    const hotFaces = diceEngineStats.hotFaces.join(',');
+    const coldFaces = diceEngineStats.coldFaces.join(',');
     
-    return {
-        prediction: finalPrediction,
-        confidence,
-        reason: topSources.map(s => s.source).join(', '),
-        totalSources: predictions.filter(p => p.predict !== 'CHO').length,
-        trustScore: antiCheatEngine.trustScores[gameId],
-        trustStatus: antiCheatEngine.getTrustStatus(gameId)
-    };
+    let reason = `Dice: hot[${hotFaces}] cold[${coldFaces}] | Tai:${(probTai*100).toFixed(0)}%`;
+    
+    return { prediction: finalPrediction, confidence, reason };
 }
 
-function predictFromTrend(features) {
-    // Phân tích xu hướng từ tỷ lệ Tài các khoảng
-    const trendScore = (features.taiRate10 - 0.5) * 0.5 + (features.taiRate20 - 0.5) * 0.3 + (features.taiRate50 - 0.5) * 0.2;
-    const predictTrend = trendScore > 0 ? 'Tài' : 'Xỉu';
-    const confidence = Math.min(0.7, Math.abs(trendScore) * 2 + 0.4);
-    
-    return {
-        predict: predictTrend,
-        confidence,
-        source: 'trend_analysis',
-        weight: 0.15
-    };
-}
-
-function predictFromDiceDetails(features, history) {
-    const n = history.length;
-    const last = history[n-1];
-    
-    // Đếm số mặt cao (>=4) trong lần gần nhất
-    const currentHighCount = (last.d1 >= 4 ? 1 : 0) + (last.d2 >= 4 ? 1 : 0) + (last.d3 >= 4 ? 1 : 0);
-    
-    // Nếu 3 viên đều cao -> khả năng về Xỉu
-    if (currentHighCount === 3) {
-        return { predict: 'Xỉu', confidence: 0.65, source: '3_high_reversal', weight: 0.1 };
-    }
-    
-    // Nếu 3 viên đều thấp -> khả năng về Tài
-    if (currentHighCount === 0) {
-        return { predict: 'Tài', confidence: 0.65, source: '3_low_reversal', weight: 0.1 };
-    }
-    
-    // Nếu tổng điểm quá cao (>15) -> khả năng giảm
-    if (features.lastTotal > 15) {
-        return { predict: 'Xỉu', confidence: 0.6, source: 'high_score_reversal', weight: 0.08 };
-    }
-    
-    // Nếu tổng điểm quá thấp (<6) -> khả năng tăng
-    if (features.lastTotal < 6) {
-        return { predict: 'Tài', confidence: 0.6, source: 'low_score_reversal', weight: 0.08 };
-    }
-    
-    return { predict: 'CHO', confidence: 0, source: 'dice_detail', weight: 0 };
-}
-
-function predictFromVolatility(features) {
-    // Biến động cao -> dễ đảo chiều
-    if (features.volatility > 4.5) {
-        const lastResult = features.lastResult;
-        return {
-            predict: lastResult === 1 ? 'Xỉu' : 'Tài',
-            confidence: 0.6,
-            source: 'high_volatility_reversal',
-            weight: 0.07
-        };
-    }
-    
-    // Biến động thấp -> dễ tiếp tục xu hướng
-    if (features.volatility < 2.5 && features.volatility > 0) {
-        const recentTrend = features.taiRate10 > 0.5 ? 'Tài' : 'Xỉu';
-        return {
-            predict: recentTrend,
-            confidence: 0.55,
-            source: 'low_volatility_continue',
-            weight: 0.05
-        };
-    }
-    
-    return { predict: 'CHO', confidence: 0, source: 'volatility', weight: 0 };
-}
-
-function predictFromStreak(features, history) {
-    const n = history.length;
-    const streak = features.currentStreak;
-    const lastResult = features.lastResult === 1 ? 'Tài' : 'Xỉu';
-    
-    // Streak dài >= 5 -> khả năng đảo chiều
-    if (streak >= 5) {
-        const oppositeResult = lastResult === 'Tài' ? 'Xỉu' : 'Tài';
-        return {
-            predict: oppositeResult,
-            confidence: 0.55 + Math.min(0.2, (streak - 5) * 0.05),
-            source: `streak_${streak}_reversal`,
-            weight: 0.12
-        };
-    }
-    
-    // Streak ngắn 2-3 -> khả năng tiếp tục
-    if (streak >= 2 && streak <= 3) {
-        return {
-            predict: lastResult,
-            confidence: 0.55,
-            source: `streak_${streak}_continue`,
-            weight: 0.06
-        };
-    }
-    
-    return { predict: 'CHO', confidence: 0, source: 'streak', weight: 0 };
-}
-
-// ================= AUTO PING =================
-async function pingAllApis() {
-    while (true) {
-        for (const gameId of Object.keys(GAME_CONFIG)) {
-            try {
-                await fetchAndCache(gameId);
-            } catch (e) {}
-        }
-        await new Promise(resolve => setTimeout(resolve, 3000));
-    }
-}
-
-// ================= ENDPOINTS =================
+// ================= CREATE ENDPOINT =================
 function createEndpoint(gameId) {
     return async (req, res) => {
         const key = req.query.key;
@@ -903,19 +731,13 @@ function createEndpoint(gameId) {
             return res.status(403).json({ error: "Truy cập bị từ chối." });
         }
         
+        initGame(gameId);
         const config = GAME_CONFIG[gameId];
-        if (!config) {
-            return res.status(400).json({ error: "Game không hợp lệ." });
-        }
-        
-        initGameHistory(gameId);
         
         let data = await getCachedData(gameId);
         if (!data) {
             data = await fetchData(config.api_url);
-            if (!data) {
-                return res.status(500).json({ error: "Không thể lấy dữ liệu." });
-            }
+            if (!data) return res.status(500).json({ error: "Không thể lấy dữ liệu." });
         }
         
         const items = data.list || data;
@@ -926,78 +748,57 @@ function createEndpoint(gameId) {
             return res.status(500).json({ error: "Không có lịch sử." });
         }
         
-        const resultText = result === 'T' ? 'Tài' : 'Xỉu';
-        
-        // ===== KIỂM TRA ANTI-CHEAT =====
-        const integrityIssues = antiCheatEngine.checkDataIntegrity(gameId, currentItem, sessionId);
-        
-        // Kiểm định thống kê định kỳ (mỗi 10 phiên)
-        const history = gameHistory[gameId] || [];
-        if (history.length > 0 && history.length % 10 === 0) {
-            antiCheatEngine.statisticalAudit(gameId, history);
-        } else {
-            antiCheatEngine.recoverTrust(gameId);
-        }
-        
-        // Nếu đã xử lý phiên này
+        // Kiểm tra đã xử lý phiên này chưa
         if (lastProcessedSession[gameId] === sessionId) {
             const currentPred = pendingPredictions[gameId] || { prediction: 'Tài', confidence: 50 };
             const taiPercent = currentPred.prediction === 'Tài' ? currentPred.confidence : 100 - currentPred.confidence;
-            const xiuPercent = 100 - taiPercent;
             
             return res.json({
                 phien: sessionId,
                 xuc_xac: dices,
                 tong: point,
-                ket_qua: resultText,
-                phien_hien_tai: sessionId ? sessionId + 1 : "?",
+                ket_qua: result,
                 du_doan: currentPred.prediction,
-                do_tin_cay: currentPred.prediction === 'CHO' ? "0%-0%" : `${taiPercent}%-${xiuPercent}%`,
+                do_tin_cay: `${taiPercent}%-${100-taiPercent}%`,
                 id: USER_ID,
-                ai_model: ALGO_NAME,
-                trust_score: antiCheatEngine.trustScores[gameId],
-                trust_status: antiCheatEngine.getTrustStatus(gameId),
-                lich_su_du_doan: predictionHistory[gameId].slice(0, 10)
+                ai_model: `${ALGO_NAME} v12`,
+                dice_algorithms: "FaceDist,Transition,Sum,PairTriple,Sequence,NB",
+                lich_su_du_doan: predictionHistory[gameId]?.slice(0, 10) || []
             });
         }
         
-        // Kiểm tra dự đoán trước
+        // So sánh dự đoán trước với kết quả thực tế
         if (pendingPredictions[gameId] && lastProcessedSession[gameId] !== sessionId) {
             const lastPred = pendingPredictions[gameId];
-            
             if (lastPred.prediction !== 'CHO') {
-                const isCorrect = (lastPred.prediction === 'Tài' && result === 'T') ||
-                                 (lastPred.prediction === 'Xỉu' && result === 'X');
+                const isCorrect = (lastPred.prediction === 'Tài' && result === 'Tài') ||
+                                 (lastPred.prediction === 'Xỉu' && result === 'Xỉu');
                 
-                const alreadySaved = predictionHistory[gameId].some(h => h.sessionId === sessionId);
-                
+                const alreadySaved = predictionHistory[gameId]?.some(h => h.sessionId === sessionId);
                 if (!alreadySaved) {
                     predictionHistory[gameId].unshift({
                         sessionId: sessionId,
                         prediction: lastPred.prediction,
-                        actual: resultText,
-                        isCorrect,
+                        actual: result,
+                        isCorrect: isCorrect,
                         icon: isCorrect ? '✅' : '❌',
                         confidence: lastPred.confidence,
-                        trustScore: antiCheatEngine.trustScores[gameId],
                         timestamp: new Date().toISOString()
                     });
+                    totalPredictions++;
+                    if (isCorrect) totalCorrect++;
                 }
-            }
-            
-            if (predictionHistory[gameId].length > 50) {
-                predictionHistory[gameId] = predictionHistory[gameId].slice(0, 50);
+                if (predictionHistory[gameId].length > 50) predictionHistory[gameId].pop();
             }
         }
         
-        // Cập nhật session
         lastProcessedSession[gameId] = sessionId;
         
-        // Thêm vào history
-        addSession(gameId, sessionId, resultText, point, dices[0], dices[1], dices[2]);
+        // Thêm vào lịch sử
+        addSession(gameId, sessionId, result, point, dices[0], dices[1], dices[2]);
         
-        // Dự đoán phiên tiếp theo
-        const predResult = predictAdvanced(gameId);
+        // Dự đoán
+        const predResult = predictSuper(gameId);
         
         pendingPredictions[gameId] = {
             prediction: predResult.prediction,
@@ -1006,146 +807,140 @@ function createEndpoint(gameId) {
             timestamp: Date.now()
         };
         
+        const diceEngine = diceEngines[gameId];
         const taiPercent = predResult.prediction === 'Tài' ? predResult.confidence : 100 - predResult.confidence;
-        const xiuPercent = 100 - taiPercent;
         
         const response = {
             phien: sessionId,
             xuc_xac: dices,
             tong: point,
-            ket_qua: resultText,
-            phien_hien_tai: sessionId ? sessionId + 1 : "?",
+            ket_qua: result,
+            phien_hien_tai: sessionId ? parseInt(sessionId) + 1 : "?",
             du_doan: predResult.prediction,
-            do_tin_cay: predResult.prediction === 'CHO' ? "0%-0%" : `${taiPercent}%-${xiuPercent}%`,
+            do_tin_cay: predResult.prediction === 'CHO' ? "0%-0%" : `${Math.round(taiPercent)}%-${Math.round(100-taiPercent)}%`,
             id: USER_ID,
-            ai_model: ALGO_NAME,
-            engine_version: "v11.0",
-            trust_score: antiCheatEngine.trustScores[gameId],
-            trust_status: antiCheatEngine.getTrustStatus(gameId),
+            ai_model: `${ALGO_NAME} v12`,
+            // THÔNG TIN DICE ALGORITHMS
+            dice_analysis: {
+                hot_faces: diceEngine.hotFaces,
+                cold_faces: diceEngine.coldFaces,
+                mean_total: diceEngine.meanDice.total.toFixed(2),
+                variance_total: diceEngine.varianceDice.total.toFixed(2),
+                unique_triples: Object.keys(diceEngine.tripleFrequency).length,
+                total_samples: gameHistory[gameId].length
+            },
             reason: predResult.reason,
-            total_sources: predResult.totalSources || 0,
-            integrity_alerts: integrityIssues.length > 0 ? integrityIssues.map(i => i.type) : [],
-            lich_su_du_doan: predictionHistory[gameId].slice(0, 10)
+            lich_su_du_doan: predictionHistory[gameId]?.slice(0, 10) || []
         };
         
         res.json(response);
     };
 }
 
-// ================= ENDPOINTS PHỤ =================
-app.get('/api/history/:gameId', (req, res) => {
-    const key = req.query.key;
-    if (key !== AUTH_KEY) return res.status(403).json({ error: "Truy cập bị từ chối." });
-    
-    const gameId = req.params.gameId;
-    const history = predictionHistory[gameId] || [];
-    const total = history.length;
-    const correct = history.filter(h => h.isCorrect).length;
-    
-    res.json({
-        game: gameId,
-        total_predictions: total,
-        correct_predictions: correct,
-        accuracy: total > 0 ? ((correct / total) * 100).toFixed(2) + '%' : '0%',
-        trust_score: antiCheatEngine.trustScores[gameId] || 100,
-        trust_status: antiCheatEngine.getTrustStatus(gameId),
-        history
-    });
-});
-
-app.get('/api/stats', (req, res) => {
-    const key = req.query.key;
-    if (key !== AUTH_KEY) return res.status(403).json({ error: "Truy cập bị từ chối." });
-    
-    const gameStats = {};
-    let totalPreds = 0, totalCorr = 0;
-    
-    for (const gameId of Object.keys(GAME_CONFIG)) {
-        const hist = predictionHistory[gameId] || [];
-        const corr = hist.filter(h => h.isCorrect).length;
-        gameStats[gameId] = {
-            predictions: hist.length,
-            correct: corr,
-            accuracy: hist.length > 0 ? ((corr / hist.length) * 100).toFixed(2) + '%' : '0%',
-            trust_score: antiCheatEngine.trustScores[gameId] || 100,
-            trust_status: antiCheatEngine.getTrustStatus(gameId)
-        };
-        totalPreds += hist.length;
-        totalCorr += corr;
-    }
-    
-    res.json({
-        total_predictions: totalPreds,
-        total_correct: totalCorr,
-        overall_accuracy: totalPreds > 0 ? ((totalCorr / totalPreds) * 100).toFixed(2) + '%' : '0%',
-        games: gameStats
-    });
-});
-
-app.get('/api/anti-cheat/:gameId', (req, res) => {
-    const key = req.query.key;
-    if (key !== AUTH_KEY) return res.status(403).json({ error: "Truy cập bị từ chối." });
-    
-    const gameId = req.params.gameId;
-    const history = gameHistory[gameId] || [];
-    
-    let auditResult = null;
-    if (history.length >= 50) {
-        auditResult = antiCheatEngine.statisticalAudit(gameId, history);
-    }
-    
-    res.json({
-        game: gameId,
-        trust_score: antiCheatEngine.trustScores[gameId] || 100,
-        trust_status: antiCheatEngine.getTrustStatus(gameId),
-        total_sessions: history.length,
-        last_audit: auditResult?.metrics || null,
-        recent_issues: auditResult?.issues || [],
-        anomaly_log: antiCheatEngine.anomalyLog[gameId]?.slice(-10) || []
-    });
-});
-
-// ================= START SERVER =================
+// ================= ENDPOINTS =================
 app.use(express.json());
 
 for (const gameId of Object.keys(GAME_CONFIG)) {
     app.get(`/api/${gameId}`, createEndpoint(gameId));
 }
 
-app.get('/api/health', (req, res) => {
-    res.json({ 
-        status: "healthy", 
-        version: "v11.0",
-        games: Object.keys(GAME_CONFIG).length,
-        engines: {
-            dice_graph: diceGraphEngine.updateCount > 0 ? 'active' : 'learning',
-            pattern_cluster: Object.keys(patternClusterEngine.patterns).length > 0 ? 'active' : 'learning',
-            anti_cheat: 'active'
-        }
+// Endpoint lấy thống kê dice
+app.get('/api/dice-stats/:gameId', (req, res) => {
+    const key = req.query.key;
+    if (key !== AUTH_KEY) return res.status(403).json({ error: "Access denied" });
+    
+    const gameId = req.params.gameId;
+    const diceEngine = diceEngines[gameId];
+    if (!diceEngine) return res.json({ error: "Game not initialized" });
+    
+    res.json({
+        game: gameId,
+        face_frequency: diceEngine.faceFrequency,
+        face_by_position: diceEngine.faceByPosition,
+        hot_faces: diceEngine.hotFaces,
+        cold_faces: diceEngine.coldFaces,
+        mean_dice: diceEngine.meanDice,
+        variance_dice: diceEngine.varianceDice,
+        unique_triples: Object.keys(diceEngine.tripleFrequency).length,
+        double_frequency: diceEngine.doubleFrequency,
+        total_sequences: diceEngine.diceSequence.length,
+        algorithms_active: [
+            "FaceDistribution",
+            "FaceTransition",
+            "SumAnalysis",
+            "PairTripleAnalysis",
+            "SequenceAnalysis",
+            "NaiveBayes"
+        ]
+    });
+});
+
+app.get('/api/stats', (req, res) => {
+    const key = req.query.key;
+    if (key !== AUTH_KEY) return res.status(403).json({ error: "Access denied" });
+    
+    res.json({
+        total_predictions: totalPredictions,
+        total_correct: totalCorrect,
+        accuracy: totalPredictions > 0 ? ((totalCorrect / totalPredictions) * 100).toFixed(2) + '%' : '0%',
+        algorithm_version: "v12 - Dice Algorithms Master",
+        dice_algorithms: [
+            "Face Distribution Analyzer",
+            "Face Transition Matrix",
+            "Sum Probability & Trend",
+            "Pair & Triple Analysis",
+            "Dice Sequence Pattern",
+            "Statistical Metrics",
+            "Naive Bayes Prediction"
+        ]
     });
 });
 
 app.get('/', (req, res) => {
     res.json({
         service: ALGO_NAME,
-        version: "v11.0",
+        version: "v12.0",
+        description: "Thuật toán dice cao cấp + thuật toán cầu truyền thống",
         endpoints: Object.keys(GAME_CONFIG).map(id => `/api/${id}`),
-        features: [
-            "Dice Graph Engine (Markov)",
-            "Pattern Cluster Engine",
-            "Statistical Anti-Cheat Detection",
-            "Feature Extraction & Trend Analysis"
-        ],
-        auth: "?key=???"
+        dice_algorithms: [
+            "🎲 Face Distribution - Phân tích tần suất từng mặt",
+            "🔄 Face Transition - Ma trận chuyển tiếp mặt xúc xắc",
+            "📊 Sum Probability - Xác suất và xu hướng tổng điểm",
+            "🔗 Pair & Triple - Phân tích cặp và bộ ba",
+            "📈 Sequence Analysis - Pattern chuỗi dice",
+            "📉 Statistical Metrics - Mean, Variance, Hot/Cold",
+            "🤖 Naive Bayes - Machine Learning cho dice"
+        ]
     });
 });
 
-pingAllApis();
+// Auto ping
+async function autoPing() {
+    while (true) {
+        for (const gameId of Object.keys(GAME_CONFIG)) {
+            try {
+                const config = GAME_CONFIG[gameId];
+                const data = await fetchData(config.api_url);
+                if (data) gameCache[gameId] = { data, ts: Date.now() };
+            } catch(e) {}
+        }
+        await new Promise(r => setTimeout(r, 5000));
+    }
+}
+autoPing();
 
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 DICE MASTER AI v11.0 đang chạy...`);
-    console.log(`📡 Port: ${PORT} | 🔑 Key: ${AUTH_KEY}`);
-    console.log(`🎮 Games: ${Object.keys(GAME_CONFIG).join(', ')}`);
-    console.log(`🛡️ Anti-Cheat: ACTIVE`);
-    console.log(`🧠 Engines: Dice Graph | Pattern Cluster | Statistical Audit`);
+    console.log(`\n🎲 ${ALGO_NAME} v12.0 - DICE ALGORITHMS MASTER`);
+    console.log(`📡 Port: ${PORT}`);
+    console.log(`🔑 Auth Key: ${AUTH_KEY}`);
+    console.log(`\n📊 THUẬT TOÁN DICE ĐÃ KÍCH HOẠT:`);
+    console.log(`   1. Face Distribution Analyzer`);
+    console.log(`   2. Face Transition Matrix`);
+    console.log(`   3. Sum Probability & Trend`);
+    console.log(`   4. Pair & Triple Analysis`);
+    console.log(`   5. Dice Sequence Pattern`);
+    console.log(`   6. Statistical Metrics (Hot/Cold faces)`);
+    console.log(`   7. Naive Bayes Prediction`);
+    console.log(`\n🎮 Games: LC79_TX, LC79_MD5, BETVIP_TX, BETVIP_MD5`);
+    console.log(`=========================================\n`);
 });
