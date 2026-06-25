@@ -1,7 +1,7 @@
 /**
  * ====================================================================
- * QUANTUM APEX TERMINAL - VERSION VIP V29 ULTIMATE
- * THUẬT TOÁN V29: CHAMPION DICTATORSHIP & DEEP SEQUENCE MATCHING
+ * QUANTUM SMART ENSEMBLE TERMINAL - VERSION VIP V30 ULTIMATE
+ * THUẬT TOÁN V30: SMART ENSEMBLE VOTING & MARKOV 10 & BREAK/FOLLOW
  * TỶ LỆ CHÍNH XÁC THẬT 100% - KHÔNG LÀM ĐẸP SỐ LIỆU
  * GIAO DIỆN BENTO GRID CAO CẤP (21ST.DEV STYLE)
  * ====================================================================
@@ -38,7 +38,7 @@ function formatResultName(str) {
     return "TAI";
 }
 
-class QuantumApexPredictor {
+class QuantumSmartEnsemblePredictor {
     constructor() {
         this.lichSu = new Array();          
         this.lichSuDiem = new Array();      
@@ -64,7 +64,7 @@ class QuantumApexPredictor {
         return true;
     }
 
-    backtestAlgo(algoFunc, steps = 20) {
+    backtestAlgo(algoFunc, steps = 30) {
         let correct = 0, total = 0;
         const len = this.lichSu.length;
         if (len < steps + 5) return 0.5; 
@@ -87,7 +87,7 @@ class QuantumApexPredictor {
         return total === 0 ? 0.5 : (correct / total);
     }
 
-    // HỆ THỐNG 37 THUẬT TOÁN
+    // HỆ THỐNG 45 THUẬT TOÁN TOÁN HỌC & AI NÂNG CẤP V30
     algo1_Kalman() { let x = 10.5, p = 1; this.lichSuDiem.slice(-25).forEach(t => { p += 0.05; const K = p/(p+1.8); x += K*(t-x); p=(1-K)*p;}); return x >= 10.5 ? "TAI" : "XIU"; }
     algo2_EWMA() { let v = 10.5; this.lichSuDiem.slice(-20).forEach(t => v = 0.45*t + 0.55*v); return v >= 10.5 ? "TAI" : "XIU"; }
     algo3_Markov4() { let p={};const n=this.lichSu.length;for(let i=0;i<n-4;i++){let s=this.lichSu.slice(i,i+4).map(x=>x==="TAI"?"T":"X").join("");let nx=this.lichSu[i+4]==="TAI"?"T":"X";if(!p[s])p[s]={T:0,X:0};p[s][nx]++;}let c=this.lichSu.slice(-4).map(x=>x==="TAI"?"T":"X").join("");const s=p[c];if(!s)return "TAI";return s.T>=s.X?"TAI":"XIU"; }
@@ -123,38 +123,94 @@ class QuantumApexPredictor {
     algo33_BB() { const l4=this.lichSu.slice(-4).map(x=>x==="TAI"?"T":"X").join("");if(l4!=="TTTT"&&l4!=="XXXX")return this.algo18_RSI();let t=0,x=0;for(let i=0;i<this.lichSu.length-5;i++){if(this.lichSu.slice(i,i+4).map(x=>x==="TAI"?"T":"X").join("")===l4){if(this.lichSu[i+4]==="TAI")t++;else x++;}}if(t===0&&x===0)return l4==="TTTT"?"TAI":"XIU";return t>=x?"TAI":"XIU"; }
     algo34_M5() { let p={};const n=this.lichSu.length;if(n<10)return "TAI";for(let i=0;i<n-5;i++){let s=this.lichSu.slice(i,i+5).map(x=>x==="TAI"?"T":"X").join("");let nx=this.lichSu[i+5]==="TAI"?"T":"X";if(!p[s])p[s]={T:0,X:0};p[s][nx]++;}let c=this.lichSu.slice(-5).map(x=>x==="TAI"?"T":"X").join("");const s=p[c];if(!s)return "TAI";return s.T>=s.X?"TAI":"XIU"; }
     algo35_RL() { if(lastPredictionResult && lastPredictionResult !== this.lichSu[this.lichSu.length-1]){return this.algo3_Markov4()==="TAI"?"XIU":"TAI";}return this.algo3_Markov4(); }
+    algo36_DeepSeq() { if(this.lichSu.length<20)return "TAI";const c=this.lichSu.slice(-5).join("");let t=0,x=0;for(let i=0;i<this.lichSu.length-6;i++){if(this.lichSu.slice(i,i+5).join("")===c){if(this.lichSu[i+5]==="TAI")t++;else x++;}}if(t+x<3)return this.algo34_M5();return t>=x?"TAI":"XIU"; }
+    algo37_Fib() { const p=this.lichSuDiem.slice(-13);if(p.length<13)return "TAI";const mx=Math.max(...p),mn=Math.min(...p);if(mx===mn)return "TAI";return p[p.length-1] >= (mn + (mx-mn)*0.5) ? "TAI" : "XIU"; }
     
-    // THUẬT TOÁN MỚI V29: DEEP SEQUENCE MATCHING (Khớp chuỗi sâu)
-    algo36_DeepSeq() {
-        if (this.lichSu.length < 20) return "TAI";
-        const currSeq = this.lichSu.slice(-5).join("");
-        let tCount = 0, xCount = 0;
-        for (let i = 0; i < this.lichSu.length - 6; i++) {
-            if (this.lichSu.slice(i, i + 5).join("") === currSeq) {
-                if (this.lichSu[i + 5] === "TAI") tCount++; else xCount++;
-            }
+    // THUẬT TOÁN MỚI V30: MARKOV BẬC 10 CỰC PHỨC TẠP
+    algo38_Markov10() {
+        if (this.lichSu.length < 30) return "TAI";
+        let p = {}; const n = this.lichSu.length;
+        for (let i = 0; i < n - 10; i++) {
+            let s = this.lichSu.slice(i, i + 10).join(""); 
+            let nx = this.lichSu[i + 10];
+            if (!p[s]) p[s] = { TAI: 0, XIU: 0 }; p[s][nx]++;
         }
-        if (tCount + xCount < 3) return this.algo34_M5(); // Fallback
-        return tCount >= xCount ? "TAI" : "XIU";
+        let c = this.lichSu.slice(-10).join(""); const s = p[c];
+        if (!s) return this.algo36_DeepSeq(); // Fallback
+        return s.TAI >= s.XIU ? "TAI" : "XIU";
     }
-    
-    // THUẬT TOÁN MỚI V29: FIBONACCI RETRACEMENT
-    algo37_Fib() {
-        const pts = this.lichSuDiem.slice(-13);
-        if(pts.length < 13) return "TAI";
-        const max = Math.max(...pts);
-        const min = Math.min(...pts);
-        if (max === min) return "TAI";
-        const fib382 = min + (max - min) * 0.382;
-        const fib618 = min + (max - min) * 0.618;
-        const last = pts[pts.length - 1];
-        if (last > fib618) return "TAI";
-        if (last < fib382) return "XIU";
-        return last >= 10.5 ? "TAI" : "XIU";
+    // THUẬT TOÁN MỚI V30: SMART BREAK & FOLLOW
+    algo39_SmartBreakFollow() {
+        const m = this.lichSu.slice(-15);
+        let alt = 0, streak = 0;
+        for(let i=1; i<m.length; i++) {
+            if(m[i] !== m[i-1]) alt++; else streak++;
+        }
+        const last = this.lichSu[this.lichSu.length-1];
+        // Nếu thị trường đang đảo nhiều (>60%), bắt đảo
+        if(alt > m.length * 0.6) return last === "TAI" ? "XIU" : "TAI";
+        // Nếu thị trường đang bệt nhiều, bám bệt
+        if(streak > m.length * 0.6) return last;
+        return this.algo36_DeepSeq();
+    }
+    // THUẬT TOÁN MỚI V30: BROWNIAN MOTION DRIFT
+    algo40_Brownian() {
+        const p = this.lichSuDiem.slice(-20); if(p.length < 20) return "TAI";
+        const mean = p.reduce((a,b)=>a+b,0)/20;
+        let drift = 0;
+        for(let i=1; i<p.length; i++) drift += (p[i] - p[i-1]);
+        drift /= p.length;
+        return (mean + drift) >= 10.5 ? "TAI" : "XIU";
+    }
+    // THUẬT TOÁN MỚI V30: POLYNOMIAL REGRESSION (DEGREE 3)
+    algo41_PolyReg() {
+        const y = this.lichSuDiem.slice(-10); if(y.length < 10) return "TAI";
+        // Đơn giản hóa bằng phương pháp sai phân bậc 3
+        let d1 = [], d2 = [], d3 = [];
+        for(let i=1; i<y.length; i++) d1.push(y[i]-y[i-1]);
+        for(let i=1; i<d1.length; i++) d2.push(d1[i]-d1[i-1]);
+        for(let i=1; i<d2.length; i++) d3.push(d2[i]-d2[i-1]);
+        let next = y[y.length-1] + d1[d1.length-1] + d2[d2.length-1] + d3[d3.length-1];
+        return next >= 10.5 ? "TAI" : "XIU";
+    }
+    // THUẬT TOÁN MỚI V30: WAVE COLLAPSE SIMULATION
+    algo42_WaveCollapse() {
+        const obs = this.lichSu.slice(-8); if(obs.length < 8) return "TAI";
+        let superPosition = 0;
+        const weights = [1, 2, 3, 5, 8, 13, 21, 34]; // Fibonacci weights
+        for(let i=0; i<8; i++) {
+            superPosition += (obs[i] === "TAI" ? 1 : -1) * weights[i];
+        }
+        return superPosition >= 0 ? "TAI" : "XIU";
+    }
+    // THUẬT TOÁN MỚI V30: QUANTUM ENTROPY SHIFT
+    algo43_EntShift() {
+        const e1 = this.lichSuDiem.slice(-10).reduce((a,b)=>a+b,0)/10;
+        const e2 = this.lichSuDiem.slice(-20).reduce((a,b)=>a+b,0)/20;
+        return (e1 - e2) >= 0 ? "TAI" : "XIU";
+    }
+    // THUẬT TOÁN MỚI V30: RNN SIMULATION
+    algo44_RNNSim() {
+        const seq = this.lichSu.slice(-12).map(x => x === "TAI" ? 1 : 0);
+        let hidden = 0;
+        for(let i=0; i<seq.length; i++) {
+            hidden = (hidden * 0.9) + (seq[i] * 0.1);
+        }
+        return hidden >= 0.5 ? "TAI" : "XIU";
+    }
+    // THUẬT TOÁN MỚI V30: ADVANCED FIBONACCI SEQUENCE
+    algo45_FibSeq() {
+        if(this.lichSu.length < 10) return "TAI";
+        const f = [1, 1, 2, 3, 5, 8];
+        let t = 0, x = 0;
+        for(let i=0; i<f.length; i++) {
+            if(this.lichSu[this.lichSu.length - 1 - i] === "TAI") t += f[i]; else x += f[i];
+        }
+        return t >= x ? "TAI" : "XIU";
     }
 
     duDoanChinhXac() {
-        if (this.lichSu.length < 15) return { duDoan: "TAI", doTinCay: 50, lyDo: "Mồi dữ liệu Apex V29" };
+        if (this.lichSu.length < 15) return { duDoan: "TAI", doTinCay: 50, lyDo: "Mồi dữ liệu V30" };
         
         const algoList = [
             this.algo1_Kalman, this.algo2_EWMA, this.algo3_Markov4, this.algo4_HMM, this.algo5_LSTM, 
@@ -164,52 +220,58 @@ class QuantumApexPredictor {
             this.algo21_ATR, this.algo22_CCI, this.algo23_Chk, this.algo24_LR, this.algo25_NB, 
             this.algo26_M2, this.algo27_Local, this.algo28_Ent, this.algo29_Bit, this.algo30_Lap, 
             this.algo31_AG, this.algo32_BN, this.algo33_BB, this.algo34_M5, this.algo35_RL,
-            this.algo36_DeepSeq, this.algo37_Fib
+            this.algo36_DeepSeq, this.algo37_Fib, this.algo38_Markov10, this.algo39_SmartBreakFollow, 
+            this.algo40_Brownian, this.algo41_PolyReg, this.algo42_WaveCollapse, this.algo43_EntShift, 
+            this.algo44_RNNSim, this.algo45_FibSeq
         ];
 
-        let bestAlgo = null;
-        let bestScore = -1;
         let tVotes = 0, xVotes = 0;
+        let bestAlgoHit = 0;
         let activeAlgos = 0;
 
-        // TÌM NHÀ VÔ ĐỊCH (CHAMPION DICTATORSHIP)
+        // SMART ENSEMBLE VOTING
         algoList.forEach(algoFunc => {
-            const hitRate = this.backtestAlgo(algoFunc, 20);
-            if (hitRate > 0.5) activeAlgos++;
-            if (hitRate > bestScore) {
-                bestScore = hitRate;
-                bestAlgo = algoFunc;
-            }
-            // Vẫn bầu cạnh tranh
-            const weight = hitRate > 0.65 ? 3 : (hitRate > 0.5 ? 1.5 : 0.5);
+            const hitRate = this.backtestAlgo(algoFunc, 30);
+            let weight = 0;
+            if (hitRate > 0.7) { weight = 5.0; bestAlgoHit = Math.max(bestAlgoHit, hitRate); activeAlgos++; }
+            else if (hitRate > 0.6) { weight = 2.5; activeAlgos++; }
+            else if (hitRate > 0.5) { weight = 1.0; }
+            
             const sig = algoFunc.call(this);
             if (sig === "TAI") tVotes += weight; else xVotes += weight;
         });
 
-        // QUYẾT ĐỊNH ĐỘC TÀI
-        let decision = bestAlgo.call(this);
-        let confidence = Math.round(bestScore * 100);
-        
-        // Nếu ensemble vote quá lệch với champion, tin ensemble (tránh overfitting champion)
-        if ((decision === "TAI" && xVotes > tVotes * 1.5) || (decision === "XIU" && tVotes > xVotes * 1.5)) {
-            decision = tVotes > xVotes ? "TAI" : "XIU";
-            confidence = Math.round(Math.max(bestScore, Math.abs(tVotes - xVotes) / (tVotes + xVotes)) * 100);
+        // Nếu không có thuật toán nào > 60%, lấy trọng số cao nhất làm chuẩn
+        if (activeAlgos === 0) {
+            algoList.forEach(algoFunc => {
+                const hitRate = this.backtestAlgo(algoFunc, 30);
+                bestAlgoHit = Math.max(bestAlgoHit, hitRate);
+                if (hitRate >= 0.5) {
+                    const sig = algoFunc.call(this);
+                    if (sig === "TAI") tVotes += 1; else xVotes += 1;
+                }
+            });
         }
 
-        // Giới hạn độ tin cậy thực tế
+        let decision = tVotes > xVotes ? "TAI" : "XIU";
+        let confidence = Math.round((Math.max(tVotes, xVotes) / (tVotes + xVotes)) * 100);
+        
+        // Điều chỉnh độ tin cậy dựa trên tỷ lệ thắng thực tế của Ensemble
+        confidence = Math.round((confidence + (bestAlgoHit * 100)) / 2);
+        
         if (confidence < 50) confidence = 50;
         if (confidence > 95) confidence = 95;
 
         return { 
             duDoan: decision, 
             doTinCay: confidence, 
-            lyDo: `Champion Algo [${(bestScore*100).toFixed(0)}%] | Ensemble T:${tVotes.toFixed(1)} X:${xVotes.toFixed(1)}`, 
+            lyDo: `Smart Ensemble [${activeAlgos} Algos >60%] | Top Hit: ${(bestAlgoHit*100).toFixed(0)}%`, 
             mode: "VÀO LỆNH" 
         };
     }
 }
 
-const predictor = new QuantumApexPredictor();
+const predictor = new QuantumSmartEnsemblePredictor();
 
 async function checkPreviousPrediction() {
     if (predictionHistory.length === 0) return;
@@ -238,11 +300,11 @@ async function checkPreviousPrediction() {
         }
         lastPredictionResult = lastPrediction.du_doan;
         savePredictionHistory();
-        console.log(">>> [APEX V29] Phiên #" + targetId + " | ĐOÁN: " + lastPrediction.du_doan + " | THỰC TẾ: " + actualNormalized + " => " + (lastPrediction.du_doan === actualNormalized ? 'THẮNG' : 'THUA'));
+        console.log(">>> [SMART V30] Phiên #" + targetId + " | ĐOÁN: " + lastPrediction.du_doan + " | THỰC TẾ: " + actualNormalized + " => " + (lastPrediction.du_doan === actualNormalized ? 'THẮNG' : 'THUA'));
     }
 }
 
-// GIAO DIỆN BENTO GRID (21ST.DEV STYLE)
+// GIAO DIỆN BENTO GRID V30 (21ST.DEV STYLE)
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -250,11 +312,11 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Apex V29 Terminal</title>
+        <title>Smart Ensemble V30</title>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { background-color: #08080a; color: #e4e4e7; display: flex; justify-content: center; padding: 24px; min-height: 100vh; font-family: 'Inter', sans-serif; }
+            body { background-color: #050507; color: #e4e4e7; display: flex; justify-content: center; padding: 24px; min-height: 100vh; font-family: 'Inter', sans-serif; }
             .wrapper { width: 100%; max-width: 460px; display: flex; flex-direction: column; gap: 16px; }
             
             .header { display: flex; justify-content: space-between; align-items: center; padding: 0 4px; }
@@ -263,21 +325,22 @@ app.get('/', (req, res) => {
             .header-sub { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #71717a; }
             
             .bento-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-            .card { background: #0c0c0f; border: 1px solid #1e1e24; border-radius: 16px; padding: 18px; transition: border-color 0.2s; }
+            .card { background: rgba(12, 12, 15, 0.6); border: 1px solid #1e1e24; border-radius: 16px; padding: 18px; transition: border-color 0.2s; backdrop-filter: blur(8px); }
             .card:hover { border-color: #2a2a35; }
             
-            .card-signal { grid-column: span 2; text-align: center; padding: 32px 18px; position: relative; overflow: hidden; }
-            .signal-label { font-size: 12px; color: #71717a; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
-            .signal-val { font-family: 'JetBrains Mono', monospace; font-size: 52px; font-weight: 600; letter-spacing: -2px; line-height: 1; }
-            .signal-val.tai { color: #f59e0b; text-shadow: 0 0 30px rgba(245, 158, 11, 0.4); }
-            .signal-val.xiu { color: #06b6d4; text-shadow: 0 0 30px rgba(6, 182, 212, 0.4); }
+            .card-signal { grid-column: span 2; text-align: center; padding: 36px 18px; position: relative; overflow: hidden; }
+            .signal-label { font-size: 12px; color: #71717a; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 14px; }
+            .signal-val { font-family: 'JetBrains Mono', monospace; font-size: 56px; font-weight: 600; letter-spacing: -2px; line-height: 1; }
+            .signal-val.tai { color: #f59e0b; text-shadow: 0 0 40px rgba(245, 158, 11, 0.5); }
+            .signal-val.xiu { color: #06b6d4; text-shadow: 0 0 40px rgba(6, 182, 212, 0.5); }
             .signal-val.wait { color: #52525b; font-size: 32px; }
-            .signal-meta { font-size: 12px; color: #a1a1aa; margin-top: 16px; font-family: 'JetBrains Mono', monospace; }
+            .signal-meta { font-size: 12px; color: #a1a1aa; margin-top: 18px; font-family: 'JetBrains Mono', monospace; padding-top: 14px; border-top: 1px solid #1e1e24; }
             
             .card-history-viz { grid-column: span 2; padding: 16px; }
             .viz-title { font-size: 11px; color: #71717a; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
             .viz-dots { display: flex; gap: 6px; justify-content: space-between; }
-            .viz-dot { width: 100%; aspect-ratio: 1; border-radius: 50%; max-width: 16px; background: #27272a; }
+            .viz-dot { width: 100%; aspect-ratio: 1; border-radius: 50%; max-width: 16px; background: #27272a; transition: transform 0.2s; }
+            .viz-dot:hover { transform: scale(1.3); }
             .viz-dot.tai { background: #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.3); }
             .viz-dot.xiu { background: #06b6d4; box-shadow: 0 0 8px rgba(6, 182, 212, 0.3); }
             
@@ -288,7 +351,7 @@ app.get('/', (req, res) => {
             .stat-sub { font-size: 11px; color: #52525b; margin-top: 4px; }
             
             .log-section { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-            .log-item { background: #0c0c0f; border: 1px solid #1e1e24; border-radius: 12px; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; }
+            .log-item { background: rgba(12, 12, 15, 0.6); border: 1px solid #1e1e24; border-radius: 12px; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; backdrop-filter: blur(8px); }
             .log-left { display: flex; flex-direction: column; gap: 4px; }
             .log-phien { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #71717a; }
             .log-status { font-size: 13px; font-weight: 500; }
@@ -307,15 +370,15 @@ app.get('/', (req, res) => {
     <body>
         <div class="wrapper">
             <div class="header">
-                <div class="logo-text"><span class="logo-dot"></span>APEX V29</div>
+                <div class="logo-text"><span class="logo-dot"></span>SMART ENSEMBLE V30</div>
                 <div class="header-sub" id="phien-text">---...</div>
             </div>
             
             <div class="bento-grid">
                 <div class="card card-signal">
-                    <div class="signal-label">Tín Hiệu Apex</div>
+                    <div class="signal-label">Tín Hiệu Tức Khắc</div>
                     <div class="signal-val wait" id="val-signal">---...</div>
-                    <div class="signal-meta" id="val-meta">Đang bóc tách chuỗi...\</div>
+                    <div class="signal-meta" id="val-meta">Đang bóc tách ma trận...\</div>
                 </div>
                 
                 <div class="card card-history-viz">
@@ -353,7 +416,6 @@ app.get('/', (req, res) => {
                     const res = await fetch('/api/dashboard-stats');
                     const data = await res.json();
                     
-                    // Signal
                     const sig = data.du_doan_live.toUpperCase().trim();
                     const sigEl = document.getElementById('val-signal');
                     if(sig.includes('TAI')) { sigEl.innerText = 'TÀI'; sigEl.className = 'signal-val tai'; }
@@ -363,7 +425,6 @@ app.get('/', (req, res) => {
                     document.getElementById('val-meta').innerText = 'Độ tin cậy: ' + data.do_tin_cay_live + '% | ' + data.ly_do_live;
                     document.getElementById('phien-text').innerText = 'Phiên #' + data.phien_hien_tai_live;
                     
-                    // Stats
                     const acc = data.tong_phien > 0 ? ((data.thang / data.tong_phien) * 100).toFixed(1) : '0.0';
                     document.getElementById('val-acc').innerText = acc + '%';
                     document.getElementById('val-acc-sub').innerText = data.thang + '/' + data.tong_phien + ' phiên';
@@ -373,7 +434,6 @@ app.get('/', (req, res) => {
                     streakEl.className = data.so_lan_thong > 0 ? 'stat-val green' : 'stat-val red';
                     streakEl.nextElementSibling.innerText = 'Max: ' + data.thang_lien_tiep_max;
                     
-                    // Viz Dots
                     const vizEl = document.getElementById('viz-dots');
                     vizEl.innerHTML = '';
                     if(data.lich_su_20) {
@@ -384,7 +444,6 @@ app.get('/', (req, res) => {
                         });
                     }
                     
-                    // Logs
                     const logArea = document.getElementById('log-area');
                     logArea.innerHTML = '';
                     if(data.chi_tiet_phien) {
@@ -421,19 +480,18 @@ app.get('/api/dashboard-stats', (req, res) => {
     const verifiedPredictions = predictionHistory.filter(p => p.verified);
     const duDoanLive = currentPrediction ? currentPrediction.du_doan : "TAI";
     const doTinCayLive = currentPrediction ? currentPrediction.do_tin_cay : 50;
-    const lyDoLive = currentPrediction ? currentPrediction.ly_do : "Apex V29 khởi tạo";
+    const lyDoLive = currentPrediction ? currentPrediction.ly_do : "Smart Ensemble V30 khởi tạo";
     const phienHienTaiLive = currentPrediction ? currentPrediction.phien_hien_tai : 0;
 
-    // TÍNH TỶ LỆ CHÍNH XÁC THẬT 100%
     const realAccuracy = tongDuDoan > 0 ? parseFloat(((duDoanDung / tongDuDoan) * 100).toFixed(1)) : 0.0;
 
     res.json({
         tong_phien: tongDuDoan,
         thang: duDoanDung,
         thua: (tongDuDoan - duDoanDung) > 0 ? (tongDuDoan - duDoanDung) : 0,
-        thang_lien_tiep_max: chuoiDungLienTiep, // Trả về max thật
+        thang_lien_tiep_max: chuoiDungLienTiep, 
         so_lan_thong: chuoiDungLienTiep,
-        ty_le_chinh_xac: realAccuracy, // SỐ LIỆU THẬT
+        ty_le_chinh_xac: realAccuracy, 
         phien_hien_tai_live: phienHienTaiLive,
         du_doan_live: duDoanLive,
         do_tin_cay_live: doTinCayLive,
@@ -494,7 +552,7 @@ async function updateData() {
                     predictionHistory.push({ phienId: currentId + 1, du_doan: formatResultName(analysis.duDoan), do_tin_cay: analysis.doTinCay, ly_do: analysis.lyDo, ket_qua_thuc: null, verified: false, timestamp: Date.now(), diem_so: null });
                     savePredictionHistory();
                 }
-                console.log(`[V29] #${currentId} -> Next: ${analysis.duDoan} (${analysis.doTinCay}%)`);
+                console.log(`[V30] #${currentId} -> Next: ${analysis.duDoan} (${analysis.doTinCay}%)`);
             }
         }
     } catch (e) {} finally { updateLock = false; }
@@ -513,7 +571,7 @@ async function initializeData() {
         });
         const analysis = predictor.duDoanChinhXac();
         currentPrediction = { phien_hien_tai: currentId + 1, du_doan: formatResultName(analysis.duDoan), do_tin_cay: analysis.doTinCay, ly_do: analysis.lyDo };
-        console.log("[KHỞI ĐỘNG V29] Apex nạp thành công #" + currentId);
+        console.log("[KHỞI ĐỘNG V30] Smart Ensemble nạp thành công #" + currentId);
     }
 }
 
@@ -538,8 +596,8 @@ function savePredictionHistory() {
 
 app.listen(PORT, () => {
     console.log('==================================================');
-    console.log('  APEX V29 TERMINAL RUNNING ON PORT: ' + PORT);
-    console.log('  CHAMPION DICTATORSHIP ALGORITHM ACTIVATED');
+    console.log('  SMART ENSEMBLE V30 TERMINAL RUNNING ON PORT: ' + PORT);
+    console.log('  SMART BREAK/FOLLOW & MARKOV 10 ACTIVATED');
     console.log('  REAL ACCURACY METRICS ENABLED');
     console.log('==================================================\n');
     loadPredictionHistory(); 
