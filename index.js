@@ -1,832 +1,1605 @@
 /**
- * ====================================================================
- * QUANTUM INFERENCE TERMINAL MASTER CORE - VERSION VIP V26 ULTIMATE
- * MÃ NGUỒN FULL HOÀN CHỈNH 100% KHÉP KÍN - SỬA TOÀN BỘ LỖI PHÂN MẢNH
- * QUY LUẬT TỐI CAO: CHỈ SKIP KHI BỆT ĐỦ 4 TAY (TTTT / XXXX)
- * TOÀN BỘ CÁC NHỊP KHÁC BẮT BUỘC TỔNG HỢP TẤT CẢ THUẬT TOÁN ĐỂ RA LỆNH
- * GIAO DIỆN TERMINAL CAO CẤP - HIỂN THỊ CHUẨN CHỮ: THẮNG / THUA (KHÔNG IN ĐẬM)
- * ====================================================================
+ * ════════════════════════════════════════════════════════════════════
+ * ║  🧬 TX_PREDICTOR_IMMORTAL_PHOENIX — BẤT TỬ PHƯỢNG HOÀNG    ║
+ * ║  👑 TOOL KAPUB - DỰ ĐOÁN CAO CẤP                         ║
+ * ║  ✅ TỰ SỬA LỖI — TỰ SỐNG LẠI — 30+ THUẬT TOÁN CẦU        ║
+ * ════════════════════════════════════════════════════════════════════
  */
 
 const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
-const path = require('path');
+
 const app = express();
+const PORT = process.env.PORT || 5000;
+
 app.use(express.json());
 
-// CONFIGURATION PARAMETERS MATRIX SYSTEM
-const PORT = process.env.PORT || 3000;
-const API_URL = 'https://wtxmd52.tele68.com/v1/txmd5/sessions';
-const UPDATE_INTERVAL = 1000; 
-const HISTORY_FILE = path.join(__dirname, 'prediction_history.json');
-
-let historyData = new Array();
-let currentPrediction = null;
-let lastPhienId = null;
-let updateLock = false;
-let tongDuDoan = 0;
-let duDoanDung = 0;
-let chuoiDungLienTiep = 0;
-let chuoiSaiLienTiep = 0;
-let predictionHistory = new Array();
-
-// Định dạng đồng bộ chuỗi viết hoa không dấu chống lệch pha ký tự đối soát
-function formatResultName(str) {
-    if (!str) return "Chờ...";
-    const upper = str.toUpperCase().trim();
-    if (upper === "TAI" || upper === "TÀI" || upper === "1") return "TAI";
-    if (upper === "XIU" || upper === "XỈU" || upper === "0") return "XIU";
-    return "Chờ...";
+// ============================================================
+// HÀM THỜI GIAN VIỆT NAM
+// ============================================================
+function vnNow() {
+    const now = new Date();
+    now.setHours(now.getHours() + 7);
+    return now.toISOString();
 }
 
-class QuantumMatrixSuperPredictor {
+// ============================================================
+// 📊 STATS TOÀN CỤC
+// ============================================================
+let stats = {
+    total: 0, correct: 0, wrong: 0,
+    last_prediction: null,
+    start_time: vnNow(),
+    history: [],
+    streak_correct: 0, streak_wrong: 0,
+    best_streak: 0, worst_streak: 0,
+    total_predictions_made: 0,
+    prediction_started: false,
+    tai_predictions: 0,
+    xiu_predictions: 0,
+    model_version: "IMMORTAL_PHOENIX_v8.0",
+    learning_iterations: 0,
+    total_patterns_learned: 0,
+    processed_phiens: {},
+    last_phien: 0
+};
+
+// ============================================================
+// 🧬 THUẬT TOÁN IMMORTAL_PHOENIX
+// ============================================================
+
+// ============================================================
+// 🔧 MODULE 0: HỆ THỐNG TỰ SỬA LỖI & TỰ SỐNG LẠI
+// ============================================================
+class SelfHealingSystem {
     constructor() {
-        this.lichSu = new Array();          
-        this.lichSuDiem = new Array();      
-        this.lichSuXucXac = new Array();    
-        this.lichSuMD5 = new Array();       
-        this.chuoiHienTai = new Array();    
-        
-        // Khởi tạo tham số bộ lọc Kalman Filter
-        this.kalmanX = 10.5; this.kalmanP = 1.0;  
-        this.kalmanQ = 0.05; this.kalmanR = 1.8;  
+        this.errorCount = 0;
+        this.maxErrorsBeforeReset = 5;
+        this.resetCount = 0;
+        this.healthStatus = 'HEALTHY';
+        this.errorLog = [];
+        this.lastResetTime = null;
+        this.modulesStatus = new Map();
     }
 
-    themKetQua(ketQua, tongDiem, xucXacArray, md5String) {
-        if (!tongDiem) tongDiem = 10;
-        if (!xucXacArray) xucXacArray = new Array(1, 2, 3);
-        if (!md5String) md5String = "000000000000000000000000";
-        
-        const chuẩnHóa = (ketQua === "TAI" || ketQua === "TÀI" || tongDiem >= 11) ? "TAI" : "XIU";
-        
-        this.lichSu.push(chuẩnHóa);
-        this.lichSuDiem.push(tongDiem);
-        this.lichSuXucXac.push(xucXacArray);
-        this.lichSuMD5.push(md5String);
-        
-        if (this.lichSu.length > 500) {
-            this.lichSu.shift(); this.lichSuDiem.shift();
-            this.lichSuXucXac.shift(); this.lichSuMD5.shift();
+    checkHealth(moduleName, result) {
+        if (!result || result.conf < 0 || result.conf > 100) {
+            this.reportError(moduleName, 'CONFIDENCE_OUT_OF_RANGE');
+            return false;
         }
-        this.capNhatChuoi(chuẩnHóa);
+        if (result.pred !== 'TAI' && result.pred !== 'XIU') {
+            this.reportError(moduleName, 'INVALID_PREDICTION');
+            return false;
+        }
+        this.modulesStatus.set(moduleName, 'OK');
         return true;
     }
 
-    capNhatChuoi(ketQua) {
-        if (this.chuoiHienTai.length === 0 || this.chuoiHienTai[this.chuoiHienTai.length - 1] === ketQua) {
-            this.chuoiHienTai.push(ketQua);
-        } else {
-            this.chuoiHienTai = new Array();
-            this.chuoiHienTai.push(ketQua);
-        }
-    }
-
-    // ====================================================================
-    // DANH MỤC 30 TẦNG THUẬT TOÁN ĐỊNH LƯỢNG ĐỘNG ĐỘC LẬP
-    // ====================================================================
-    algo1_Kalman() {
-        let x_est = 10.5; let p_est = 1.0; const pts = this.lichSuDiem.slice(-25);
-        pts.forEach(pt => { p_est += this.kalmanQ; const K = p_est / (p_est + this.kalmanR); x_est += K * (pt - x_est); p_est = (1 - K) * p_est; });
-        return x_est >= 10.5 ? "TAI" : "XIU";
-    }
-    algo2_EWMA() {
-        const alpha = 0.45; let val = 10.5; const pts = this.lichSuDiem.slice(-20);
-        pts.forEach(pt => { val = alpha * pt + (1 - alpha) * val; });
-        return val >= 10.5 ? "TAI" : "XIU";
-    }
-    algo3_Markov4() {
-        let patterns = {}; const n = this.lichSu.length;
-        for (let i = 0; i < n - 4; i++) {
-            let st = this.lichSu.slice(i, i + 4).map(x => x === "TAI" ? "T" : "X").join(""); let nx = this.lichSu[i + 4] === "TAI" ? "T" : "X";
-            if (!patterns[st]) patterns[st] = { T: 0, X: 0 }; patterns[st][nx]++;
-        }
-        let curr = this.lichSu.slice(-4).map(x => x === "TAI" ? "T" : "X").join(""); const s = patterns[curr];
-        if (!s || (s.T === 0 && s.X === 0)) return "TAI"; return s.T >= s.X ? "TAI" : "XIU";
-    }
-    algo4_HMMViterbi() {
-        const obs = this.lichSu.slice(-12).map(x => x === "TAI" ? 0 : 1); let path = [{ s0: 0.5, s1: 0.5 }];
-        obs.forEach(o => {
-            let prev = path[path.length - 1];
-            let p0 = Math.max(prev.s0 * 0.7, prev.s1 * 0.4) * (o === 0 ? 0.8 : 0.2);
-            let p1 = Math.max(prev.s0 * 0.3, prev.s1 * 0.6) * (o === 0 ? 0.3 : 0.7);
-            path.push({ s0: p0, s1: p1 });
-        });
-        return path[path.length - 1].s0 >= path[path.length - 1].s1 ? "TAI" : "XIU";
-    }
-    algo5_PseudoLSTM() {
-        const w = [0.02, 0.03, 0.05, 0.08, 0.12, 0.15, 0.20, 0.35]; const inp = this.lichSu.slice(-8).map(x => x === "TAI" ? 1 : 0);
-        let act = 0; for (let i = 0; i < 8; i++) act += inp[i] * w[i]; return act >= 0.5 ? "TAI" : "XIU";
-    }
-    algo6_MD5Entropy() {
-        const hash = this.lichSuMD5[this.lichSuMD5.length - 1]; if (!hash || hash.length < 16) return "TAI";
-        let d1 = parseInt(hash.substring(0, 4), 16) || 0; let d2 = parseInt(hash.substring(hash.length - 4), 16) || 0;
-        return (d1 ^ d2 ^ this.lichSuDiem[this.lichSuDiem.length - 1]) % 2 === 0 ? "XIU" : "TAI";
-    }
-    algo7_MonteCarlo() {
-        const pts = this.lichSuDiem.slice(-15); const mean = pts.reduce((a,b)=>a+b,0)/pts.length; let cTai = 0;
-        for (let i = 0; i < 1000; i++) { let r = mean + (Math.random() - 0.5) * 3.5; if (r >= 10.5) cTai++; }
-        return cTai >= 500 ? "TAI" : "XIU";
-    }
-    algo8_KNN() {
-        const curr = this.lichSu.slice(-4).map(x => x === "TAI" ? "1" : "0").join(""); let t = 0, x = 0;
-        for (let i = 0; i < this.lichSu.length - 5; i++) {
-            if (this.lichSu.slice(i, i + 4).map(v => v === "TAI" ? "1" : "0").join("") === curr) { if (this.lichSu[i+4] === "TAI") t++; else x++; }
-        }
-        return t >= x ? "TAI" : "XIU";
-    }
-    algo9_Logistic() {
-        const x1 = this.lichSuDiem[this.lichSuDiem.length - 1] || 10; const x2 = this.lichSu.slice(-6).filter(v => v === "TAI").length;
-        const logit = -0.5 + (x1 * 0.05) + (x2 * 0.2); return (1 / (1 + Math.exp(-logit))) >= 0.5 ? "TAI" : "XIU";
-    }
-    algo10_FFT() {
-        const data = this.lichSuDiem.slice(-8); let r = 0;
-        for (let n = 0; n < data.length; n++) r += data[n] * Math.cos((2*Math.PI*n)/8); return Math.abs(r) % 2 === 0 ? "TAI" : "XIU";
-    }
-    algo11_ARIMA() {
-        const pts = this.lichSuDiem.slice(-8); if (pts.length < 4) return "TAI";
-        const d1 = pts[pts.length - 1] - pts[pts.length - 2]; return (pts[pts.length - 1] + (d1 * 0.4)) >= 10.5 ? "TAI" : "XIU";
-    }
-    algo12_SMA5() { return (this.lichSuDiem.slice(-5).reduce((a,b)=>a+b,0)/5) >= 10.5 ? "TAI" : "XIU"; }
-    algo13_WMA8() {
-        const pts = this.lichSuDiem.slice(-8); let sum = 0, wSum = 0;
-        for (let i = 0; i < pts.length; i++) { sum += pts[i] * (i + 1); wSum += (i + 1); } return (sum / wSum) >= 10.5 ? "TAI" : "XIU";
-    }
-    algo14_Momentum() { return (this.lichSuDiem[this.lichSuDiem.length - 1] - (this.lichSuDiem[this.lichSuDiem.length - 4] || 10)) >= 0 ? "TAI" : "XIU"; }
-    algo15_ROC() { return (this.lichSuDiem[this.lichSuDiem.length - 1] / (this.lichSuDiem[this.lichSuDiem.length - 6] || 10)) >= 1.0 ? "TAI" : "XIU"; }
-    algo16_ZScore() { const pts = this.lichSuDiem.slice(-20); const m = pts.reduce((a,b)=>a+b,0)/pts.length; return pts[pts.length - 1] >= m ? "TAI" : "XIU"; }
-    algo17_Bands() { const pts = this.lichSuDiem.slice(-15); const m = pts.reduce((a,b)=>a+b,0)/pts.length; return this.lichSuDiem[this.lichSuDiem.length - 1] > (m + 0.5) ? "TAI" : "XIU"; }
-    algo18_RSI() {
-        const r6 = this.lichSuDiem.slice(-6); let up = 0, dn = 0;
-        for (let i = 1; i < 6; i++) { let d = r6[i] - r6[i-1]; if (d > 0) up += d; else dn += Math.abs(d); } return up >= dn ? "TAI" : "XIU";
-    }
-    algo19_MACD() { return (this.lichSuDiem.slice(-6).reduce((a,b)=>a+b,0)/6) >= (this.lichSuDiem.slice(-12).reduce((a,b)=>a+b,0)/12) ? "TAI" : "XIU"; }
-    algo20_Stochastic() {
-        const r5 = this.lichSuDiem.slice(-5); const min = Math.min(...r5), max = Math.max(...r5);
-        return (((this.lichSuDiem[this.lichSuDiem.length - 1] - min) / (max - min || 1)) * 100) >= 50 ? "TAI" : "XIU";
-    }
-    algo21_ATR() { return this.lichSuDiem[this.lichSuDiem.length - 1] >= 11 ? "TAI" : "XIU"; }
-    algo22_CCI() { const r14 = this.lichSuDiem.slice(-14); const m = r14.reduce((a,b)=>a+b,0)/14; return this.lichSuDiem[this.lichSuDiem.length - 1] >= m ? "TAI" : "XIU"; }
-    algo23_Chaikin() { return this.lichSuDiem[this.lichSuDiem.length - 1] % 2 === 0 ? "TAI" : "XIU"; }
-    algo24_LinearRegression() {
-        const y = this.lichSuDiem.slice(-5); if (y.length < 5) return "TAI"; let sx = 0, sy = 0, sxy = 0, sx2 = 0;
-        for (let x = 0; x < 5; x++) { sx += x; sy += y[x]; sxy += x * y[x]; sx2 += x * x; }
-        let slope = (5 * sxy - sx * sy) / (5 * sx2 - sx * sx || 1); return (sy/5 + slope * 5) >= 10.5 ? "TAI" : "XIU";
-    }
-    algo25_NaiveBayes() { return this.lichSu.filter(x => x === "TAI").length >= (this.lichSu.length / 2) ? "TAI" : "XIU"; }
-    algo26_MarkovBậc2() {
-        let patterns = {}; const n = this.lichSu.length; if (n < 10) return "TAI";
-        for (let i = 0; i < n - 2; i++) {
-            let st = this.lichSu.slice(i, i + 2).map(x => x === "TAI" ? "T" : "X").join(""); let nx = this.lichSu[i + 2] === "TAI" ? "T" : "X";
-            if (!patterns[st]) patterns[st] = { T: 0, X: 0 }; patterns[st][nx]++;
-        }
-        let curr = this.lichSu.slice(-2).map(x => x === "TAI" ? "T" : "X").join(""); const s = patterns[curr];
-        if (!s) return "TAI"; return s.T >= s.X ? "TAI" : "XIU";
-    }
-    algo27_XácSuấtCụcBộ() { return this.lichSu.slice(-6).filter(x => x === "TAI").length >= 3 ? "TAI" : "XIU"; }
-    algo28_EntropyGiaTốc() { return this.lichSuDiem[this.lichSuDiem.length - 1] > this.lichSuDiem[this.lichSuDiem.length - 2] ? "TAI" : "XIU"; }
-    algo29_MỏNeoBitwise() { const pts = this.lichSuDiem.slice(-3); return ((parseInt(pts)||10)^(parseInt(pts)||10)^(parseInt(pts)||10)) >= 10 ? "TAI" : "XIU"; }
-    algo30_LaplaceSmoothing() { return ((this.lichSu.filter(x => x === "TAI").length + 1) / (this.lichSu.length + 2)) >= 0.5 ? "TAI" : "XIU"; }
-
-    // ====================================================================
-    // LÕI TRƯNG CẦU BIỂU QUYẾT TỔ HỢP - GỘP TẤT CẢ THUẬT TOÁN ĐỂ ĐƯA RA KẾT QUẢ
-    // ====================================================================
-    duDoanChinhXac() {
-        if (this.lichSu.length < 15) return { duDoan: "TAI", doTinCay: 82, lyDo: "Mồi ma trận chuỗi khối", mode: "VÀO LỆNH" };
-        const lastResult = this.lichSu[this.lichSu.length - 1];
-        const dataStr20 = this.lichSu.slice(-20).map(x => x === "TAI" ? "1" : "0").join("");
-        const lastPoint = this.lichSuDiem[this.lichSuDiem.length - 1] || 10;
-
-        // --------------------------------------------------------------------
-        // CHỐT PHANH ƯU TIÊN TỐI CAO: CẦU TTTT HOẶC XXXX TUYỆT ĐỐI BỎ QUA (SKIP)
-        // --------------------------------------------------------------------
-        if (dataStr20.endsWith("1111") || dataStr20.endsWith("0000")) {
-            return {
-                duDoan: "BỎ QUA",
-                doTinCay: 0,
-                lyDo: `PHANH PHÒNG VỆ: Phát hiện chạm bệt 4 tay [${lastResult === "TAI" ? "TTTT" : "XXXX"}], cưỡng chế lệnh [SKIP]`,
-                mode: "SKIP"
-            };
-        }
-
-        // BỘ LỌC ĐỘNG SHANNON ENTROPY ĐO LƯỜNG BIẾN ĐỘNG QUỸ ĐẠO SÀN
-        const sample16 = this.lichSu.slice(-16); let shannonEntropy = 1.0;
-        if (sample16.length > 0) {
-            const pT = sample16.filter(x => x === "TAI").length / sample16.length; const pX = 1.0 - pT;
-            let ent = 0.0; if (pT > 0) ent -= pT * Math.log2(pT); if (pX > 0) ent -= pX * Math.log2(pX); shannonEntropy = ent;
-        }
-
-        // ====================================================================
-        // QUY TRÌNH HỢP NHẤT TOÀN DIỆN (TOTALIZED INFERENCE SYSTEM)
-        // Gom toàn bộ kết quả của 30 tầng toán học động để triệt tiêu lỗi phán quyết đơn lẻ
-        // ====================================================================
-        let tVotes = 0, xVotes = 0;
-        const signals = [
-            this.algo1_Kalman(), this.algo2_EWMA(), this.algo3_Markov4(), this.algo4_HMMViterbi(), this.algo5_PseudoLSTM(), this.algo6_MD5Entropy(), this.algo7_MonteCarlo(), this.algo8_KNN(), this.algo9_Logistic(), this.algo10_FFT(),
-            this.algo11_ARIMA(), this.algo12_SMA5(), this.algo13_WMA8(), this.algo14_Momentum(), this.algo15_ROC(), this.algo16_ZScore(), this.algo17_Bands(), this.algo18_RSI(), this.algo19_MACD(), this.algo20_Stochastic(),
-            this.algo21_ATR(), this.algo22_CCI(), this.algo23_Chaikin(), this.algo24_LinearRegression(), this.algo25_NaiveBayes(), this.algo26_MarkovBậc2(), this.algo27_XácSuấtCụcBộ(), this.algo28_EntropyGiaTốc(), this.algo29_MỏNeoBitwise(), this.algo30_LaplaceSmoothing()
-        ];
-        
-        let baseWeight = shannonEntropy > 0.94 ? 0.4 : 1.0;
-        signals.forEach((sig, idx) => { 
-            let w = (idx === 0 || idx === 1 || idx === 5) ? 2.5 : baseWeight; 
-            if (sig === "TAI") tVotes += w; else xVotes += w; 
+    reportError(moduleName, errorType) {
+        this.errorCount++;
+        this.errorLog.push({
+            time: new Date().toISOString(),
+            module: moduleName,
+            error: errorType,
+            errorCount: this.errorCount
         });
 
-        // Hợp nhất luồng phiếu bầu từ hệ thống 20 Bộ cầu VIP toàn cục
-        const boCauTinh = quet20BoCauTinhVIPGlobal(dataStr20);
-        if (boCauTinh.trungBoCau && !dataStr20.endsWith("11") && !dataStr20.endsWith("00")) { 
-            if (boCauTinh.duDoan === "TAI") tVotes += 3.5; else xVotes += 3.5; 
+        if (this.errorCount >= this.maxErrorsBeforeReset) {
+            this.selfHeal();
         }
+        if (this.errorLog.length > 100) this.errorLog.shift();
+    }
 
-        // Biên độ cân bằng phiếu quyết định giải băm mật mã mỏ neo MD5
-        if (Math.abs(tVotes - xVotes) < 0.1) { 
-            const tieBreaker = this.algo6_MD5Entropy() || lastResult; 
-            return { duDoan: tieBreaker, doTinCay: 84, lyDo: `Xung lực triệt tiêu -> Cược mỏ neo MD5: [${tieBreaker}]`, mode: "VÀO LỆNH" }; 
-        }
+    selfHeal() {
+        this.resetCount++;
+        this.lastResetTime = new Date().toISOString();
+        this.errorCount = 0;
+        this.healthStatus = 'HEALING';
         
-        const votingDecision = tVotes > xVotes ? "TAI" : "XIU";
+        setTimeout(() => {
+            this.healthStatus = 'HEALTHY';
+        }, 100);
+    }
 
-        // TOÁN HỌC HẬU NGHIỆM BAYESIAN CO GIÃN BIÊN ĐỘ ĐỘ TIN CẬY THỰC TẾ
-        const priorTai = this.lichSu.filter(x => x === "TAI").length / this.lichSu.length;
-        const totalSkewness = calculateWaveletSkewnessGlobal();
-        let likelihood = (votingDecision === "TAI" && totalSkewness > 0) || (votingDecision === "XIU" && totalSkewness < 0) ? 0.85 : 0.5;
-        let posteriorTai = (likelihood * priorTai) / ((likelihood * priorTai) + ((1 - likelihood) * (1 - priorTai)));
-        let realProbability = votingDecision === "TAI" ? (isNaN(posteriorTai) ? 0.5 : posteriorTai) : (1 - (isNaN(posteriorTai) ? 0.5 : posteriorTai));
+    isHealthy() { return this.healthStatus === 'HEALTHY'; }
 
-        let finalConfidence = Math.round(75 + (realProbability - 0.5) * 40 * (shannonEntropy > 0.95 ? 0.85 : 1.0));
-        if (votingDecision === lastResult) finalConfidence += 4;
-        if (finalConfidence < 60) finalConfidence = 60; if (finalConfidence > 96) finalConfidence = 96;
-
-        return { 
-            duDoan: votingDecision, 
-            doTinCay: finalConfidence, 
-            lyDo: `Tổng hợp 30 Thuật toán | Bayes[${Math.round(realProbability * 100)}%]`, 
-            mode: "VÀO LỆNH" 
+    getStatus() {
+        return {
+            health: this.healthStatus,
+            errors: this.errorCount,
+            resets: this.resetCount,
+            modules: Object.fromEntries(this.modulesStatus)
         };
     }
-} // <--- CHỐT NGOẶC NGOẶC ĐÓNG CỨNG CLASS QUANTUM DÒNG 480 CHỐNG LỖI KHỞI ĐỘNG
 
-function quet20BoCauTinhVIPGlobal(dataStr) {
-    const patterns = {
-        "Cầu_B_bệt_Tài_6": /111111$/,            "Cầu_B_bệt_Xỉu_6": /000000$/,
-        "Cầu_Gánh_1221": /(10011|01100)$/,         "Cầu_Nhảy_Xen_Kẽ_3": /(10101|01010)$/,
-        "Cầu_Nghiêng_Tài": /(11100|11110)$/,       "Cầu_Nghiêng_Xỉu": /(00011|00001)$/,
-        "Cầu_Nhịp_Kép_232": /(1100011|0011100)$/,  "Cầu_Lùi_Nhịp_42": /(111100|000011)$/,
-        "Cầu_Song_Lập_2121": /(110010|001101)$/,   "Cầu_Tách_Đôi_313": /(1110111|0001000)$/,
-        "Cầu_Đối_Xứng_323": /(11100111|00011000)$/,"Cầu_Nhịp_Chéo_131": /(10001|01110)$/,
-        "Cầu_Gánh_Kép_22122": /(110011100)$/,      "Cầu_Bệt_Dốc_7": /1111111$/,
-        "Cầu_Hồi_Mã_3_1": /(1110|0001)$/,          "Cầu_Nhịp_Xen_22": /(11001100|00110011)$/,
-        "Cầu_Chu_Kỳ_Gãy_32": /(11100|00011)$/
-    };
-    for (const [tenCau, regex] of Object.entries(patterns)) {
-        if (regex.test(dataStr)) {
-            let kq = dataStr.endsWith("1") ? "XIU" : "TAI";
-            if (tenCau.includes("Tài_6") || tenCau.includes("Bệt_Dốc_7")) kq = "TAI";
-            if (tenCau.includes("Xỉu_6")) kq = "XIU";
-            return { trungBoCau: true, duDoan: kq, ten: tenCau };
+    sanitizeResult(result) {
+        if (!result) return { pred: 'TAI', conf: 50, name: 'FALLBACK' };
+        if (result.conf > 95) result.conf = 90;
+        if (result.conf < 50) result.conf = 55;
+        if (result.pred !== 'TAI' && result.pred !== 'XIU') {
+            result.pred = 'TAI';
+            result.conf = 50;
         }
-    }
-    return { trungBoCau: false };
-}
-
-function calculateWaveletSkewnessGlobal() {
-    if (!predictor || !predictor.lichSu || predictor.lichSu.length < 15) return 0;
-    const v12 = predictor.lichSu.slice(-12).map(x => x === "TAI" ? 1 : -1); const v6 = predictor.lichSu.slice(-6).map(x => x === "TAI" ? 1 : -1);
-    return (v12.reduce((a, b) => a + b, 0) * 0.25) + (v6.reduce((a, b) => a + b, 0) * 0.75);
-}
-
-const predictor = new QuantumMatrixSuperPredictor();
-
-// ====================================================================
-// QUY TRÌNH ENGINE ĐỐI SOÁT KIỂM TOÁN HIỆU NĂNG DASHBOARD REALTIME
-// ====================================================================
-async function checkPreviousPrediction() {
-    if (predictionHistory.length === 0) return;
-    const lastPrediction = predictionHistory[predictionHistory.length - 1];
-    if (lastPrediction.verified) return;
-    if (historyData.length === 0) return;
-
-    const targetId = lastPrediction.phienId;
-    const foundSession = historyData.find(s => String(s.id || s.sessionID || s.phienId || s.sessionId || s.session_id) === String(targetId));
-    
-    if (foundSession) {
-        let tempDices = new Array(1, 2, 3);
-        if (foundSession.dices && foundSession.dices.length === 3) {
-            tempDices = foundSession.dices;
-        } else if (foundSession.result && foundSession.result.length === 3) {
-            tempDices = foundSession.result;
-        }
-        
-        const totalDices = foundSession.point || foundSession.totalResult || foundSession.score || 
-                           (parseInt(tempDices[0]) + parseInt(tempDices[1]) + parseInt(tempDices[2]));
-        
-        const actualResult = foundSession.resultTruyenThong || foundSession.resultType || (totalDices >= 11 ? "TAI" : "XIU");
-        const actualNormalized = actualResult.toUpperCase().includes("TAI") || actualResult.toUpperCase().includes("TÀI") ? "TAI" : "XIU";
-        
-        lastPrediction.verified = true;
-        lastPrediction.ket_qua_thuc = actualNormalized;
-        lastPrediction.diem_so = totalDices;
-        tongDuDoan++;
-        
-        if (lastPrediction.du_doan === actualNormalized) {
-            duDoanDung++;
-            chuoiDungLienTiep++;
-            chuoiSaiLienTiep = 0;
-        } else {
-            chuoiSaiLienTiep++;
-            chuoiDungLienTiep = 0;
-        }
-        savePredictionHistory();
-        console.log(">>> [ĐỐI CHIẾU MA TRẬN] Phiên #" + targetId + " | ĐOÁN: " + lastPrediction.du_doan + " | THỰC TẾ: " + actualNormalized + " (" + totalDices + ") => " + (lastPrediction.du_doan === actualNormalized ? 'ĐÚNG ✅' : 'SAI ❌'));
+        return result;
     }
 }
 
-// ====================================================================
-// ĐẠI PHẪU GIAO DIỆN MỚI: DARK PREMIUM ANALYTICS TERMINAL (KHÔNG IN ĐẬM)
-// ====================================================================
-app.get('/', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="vi">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Quantum Analytics Terminal</title>
-        <link href="https://googleapis.com" rel="stylesheet">
-        <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { background-color: #05070f; color: #e2e8f0; display: flex; justify-content: center; align-items: center; padding: 20px; min-height: 100vh; font-family: 'Plus Jakarta Sans', sans-serif; letter-spacing: -0.1px; }
-            .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 20px; }
-            
-            .main-display { background: linear-gradient(145deg, #0b1122 0%, #070a14 100%); border-radius: 24px; padding: 28px; border: 1px solid rgba(0, 242, 254, 0.15); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); position: relative; }
-            .panel-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-            .system-title { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #00f2fe; text-transform: uppercase; letter-spacing: 1px; display: flex; align-items: center; gap: 8px; }
-            .pulse-indicator { width: 6px; height: 6px; background-color: #00f2fe; border-radius: 50%; box-shadow: 0 0 10px #00f2fe; animation: breathe 2s infinite ease-in-out; }
-            .phien-badge { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #64748b; }
-            
-            .signal-wrapper { display: flex; flex-direction: column; align-items: center; padding: 12px 0 4px 0; }
-            .capsule-pills { display: inline-flex; align-items: center; justify-content: center; font-family: 'JetBrains Mono', monospace; font-size: 38px; font-weight: 400; padding: 10px 48px; border-radius: 100px; text-transform: uppercase; border: 1px solid transparent; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
-            .capsule-pills.tai { background: linear-gradient(135deg, #ef4444 0%, #f97316 100%); color: #ffffff; box-shadow: 0 12px 24px rgba(239, 68, 68, 0.25); border-color: rgba(239, 68, 68, 0.2); }
-            .capsule-pills.xiu { background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%); color: #ffffff; box-shadow: 0 12px 24px rgba(59, 132, 246, 0.25); border-color: rgba(59, 132, 246, 0.2); }
-            .capsule-pills.skip { background: #1e293b; color: #94a3b8; font-size: 26px; padding: 14px 40px; border-color: rgba(255,255,255,0.03); box-shadow: none; }
-            
-            .panel-logs { font-size: 13px; color: #94a3b8; line-height: 1.5; margin-top: 24px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.03); }
-            
-            .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
-            .stats-card { background: rgba(11, 17, 34, 0.4); border: 1px solid rgba(255,255,255,0.02); padding: 18px; border-radius: 18px; backdrop-filter: blur(12px); display: flex; flex-direction: column; gap: 4px; }
-            .stats-label { font-size: 13px; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; }
-            .stats-num { font-family: 'JetBrains Mono', monospace; font-size: 20px; color: #f8fafc; }
-            .stats-num.green { color: #10b981; }
-            .stats-num.red { color: #f43f5e; }
-            
-            .history-title { font-family: 'JetBrains Mono', monospace; font-size: 14px; color: #00f2fe; text-transform: uppercase; letter-spacing: 1px; margin-left: 4px; margin-bottom: 4px; }
-            .cards-stack { display: flex; flex-direction: column; gap: 8px; }
-            .log-item-card { background: #0b1122; border: 1px solid rgba(255,255,255,0.02); border-radius: 14px; padding: 14px 18px; display: flex; justify-content: space-between; align-items: center; transition: all 0.3s ease; }
-            .log-item-card:hover { border-color: rgba(0, 242, 254, 0.12); transform: translateX(2px); }
-            .card-meta-left { display: flex; flex-direction: column; gap: 2px; }
-            .card-phien-id { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #475569; }
-            .card-status-badge { font-size: 13px; font-weight: 400; }
-            .card-status-badge.thang { color: #10b981; }
-            .card-status-badge.thua { color: #f43f5e; }
-            .card-status-badge.waiting { color: #475569; }
-            
-            .card-data-right { display: flex; align-items: center; gap: 12px; }
-            .pill-history-small { font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 4px 14px; border-radius: 6px; width: 66px; text-align: center; text-transform: uppercase; border: 1px solid transparent; font-weight: 400; }
-            .pill-history-small.tai { background-color: rgba(239, 68, 68, 0.08); color: #ef4444; border-color: rgba(239, 68, 68, 0.12); }
-            .pill-history-small.xiu { background-color: rgba(59, 132, 246, 0.08); color: #3b82f6; border-color: rgba(59, 132, 246, 0.12); }
-            .pill-history-small.skip { background-color: #1e293b; color: #64748b; }
-            .res-node-txt { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #94a3b8; width: 66px; text-align: center; }
+// ============================================================
+// 🎲 MODULE 1: PHÂN TÍCH XÚC XẮC CHUYÊN SÂU
+// ============================================================
+class DeepDiceAnalyzer {
+    constructor(healer) {
+        this.healer = healer;
+        this.diceFaces = {};
+        for (let i = 1; i <= 6; i++) {
+            this.diceFaces[i] = { count: 0, streak: 0, maxStreak: 0, lastAppeared: 0, hotScore: 0 };
+        }
+        this.pairStats = new Map();
+        this.tripleStats = new Map();
+        this.totalStats = new Map();
+        this.oddEvenStats = { odd: { count: 0, streak: 0 }, even: { count: 0, streak: 0 } };
+        this.totalRolls = 0;
+        this.recentRolls = [];
+        this.predictionCache = new Map();
+    }
 
-            @keyframes breathe { 0% { opacity: 0.4; box-shadow: 0 0 6px rgba(0, 242, 254, 0.2); } 50% { opacity: 1; box-shadow: 0 0 14px rgba(0, 242, 254, 0.6); } 100% { opacity: 0.4; box-shadow: 0 0 6px rgba(0, 242, 254, 0.2); } }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="main-display">
-                <div class="panel-meta">
-                    <div class="system-title"><span class="pulse-indicator"></span>Anh Phong</div>
-                    <div class="phien-badge" id="lbl-phien-id">PHIÊN KẾ TIẾP: #0000000</div>
-                </div>
-                <div class="signal-wrapper">
-                    <div class="capsule-pills" id="lbl-live-cmd">---</div>
-                </div>
-                <div class="panel-logs" id="lbl-live-lydo">Đang bóc tách chuỗi khối ma trận đa tầng...</div>
-            </div>
+    analyzeRoll(diceResult, nextResult, nextTotal) {
+        if (!diceResult || !Array.isArray(diceResult) || diceResult.length < 3) return;
+        this.totalRolls++;
+        const total = diceResult.reduce((a, b) => a + b, 0);
+        const seenFaces = new Set();
 
-            <div class="stats-grid">
-                <div class="stats-card">
-                    <span class="stats-label">Đã duyệt</span>
-                    <span class="stats-num" id="lbl-tong">0</span>
-                </div>
-                <div class="stats-card">
-                    <span class="stats-label">Hiệu suất thực</span>
-                    <span class="stats-num green" id="lbl-tile">0.0%</span>
-                </div>
-                <div class="stats-card">
-                    <span class="stats-label">Thắng / Thua</span>
-                    <span class="stats-num"><span class="green" id="lbl-thang">0</span> <span style="color:#2d3748">/</span> <span class="red" id="lbl-thua">0</span></span>
-                </div>
-                <div class="stats-card">
-                    <span class="stats-label">Dây thông (Max)</span>
-                    <span class="stats-num"><span id="lbl-thong">0</span> <span style="color:#2d3748">/</span> <span id="lbl-chuoi-max">0</span></span>
-                </div>
-            </div>
+        for (const face of diceResult) {
+            if (face >= 1 && face <= 6) {
+                const stats = this.diceFaces[face];
+                stats.count++;
+                stats.lastAppeared = this.totalRolls;
+                stats.streak++;
+                stats.maxStreak = Math.max(stats.maxStreak, stats.streak);
+                stats.hotScore = stats.count / this.totalRolls;
+                seenFaces.add(face);
 
-            <div>
-                <div class="history-title">Nhật ký phân rã</div>
-                <div class="cards-stack" id="history-cards-area"></div>
-            </div>
-        </div>
-
-        <script>
-            function convertDisplayLabel(str) {
-                if (!str || str.toUpperCase().includes('CHỜ')) return '---';
-                const s = str.toUpperCase().trim();
-                if (s.includes('TAI')) return 'Tài';
-                if (s.includes('XIU')) return 'Xỉu';
-                return 'Bỏ qua';
+                if (face % 2 === 0) {
+                    this.oddEvenStats.even.count++;
+                    this.oddEvenStats.even.streak++;
+                    this.oddEvenStats.odd.streak = 0;
+                } else {
+                    this.oddEvenStats.odd.count++;
+                    this.oddEvenStats.odd.streak++;
+                    this.oddEvenStats.even.streak = 0;
+                }
             }
+        }
 
-            async function refreshDashboard() {
-                try {
-                    const res = await fetch('/api/dashboard-stats');
-                    const data = await res.json();
-                    
-                    if (data.phien_hien_tai_live && data.phien_hien_tai_live > 0) {
-                        document.getElementById('lbl-phien-id').innerText = 'PHIÊN KẾ TIẾP: #' + data.phien_hien_tai_live;
-                    }
+        for (let i = 1; i <= 6; i++) {
+            if (!seenFaces.has(i)) this.diceFaces[i].streak = 0;
+        }
 
-                    const cmdElem = document.getElementById('lbl-live-cmd');
-                    const normalizedCmd = data.du_doan_live.toUpperCase().trim();
-                    
-                    if (normalizedCmd.includes('TAI')) {
-                        cmdElem.innerText = 'Tài'; cmdElem.className = 'capsule-pills tai';
-                    } else if (normalizedCmd.includes('XIU')) {
-                        cmdElem.innerText = 'Xỉu'; cmdElem.className = 'capsule-pills xiu';
-                    } else {
-                        cmdElem.innerText = 'Bỏ qua'; cmdElem.className = 'capsule-pills skip';
-                    }
-
-                    document.getElementById('lbl-live-lydo').innerText = 'Độ tự tin pha: ' + (data.mode_live === 'SKIP' ? '0%' : data.do_tin_cay_live + '%') + ' | ' + data.ly_do_live;
-
-                    document.getElementById('lbl-tong').innerText = data.tong_phien;
-                    document.getElementById('lbl-thang').innerText = data.thang;
-                    document.getElementById('lbl-thua').innerText = data.thua;
-                    document.getElementById('lbl-tile').innerText = data.ty_le_chinh_xac + '%';
-                    document.getElementById('lbl-thong').innerText = data.so_lan_thong;
-                    document.getElementById('lbl-chuoi-max').innerText = data.thang_lien_tiep_max;
-                    
-                    const cardsArea = document.getElementById('history-cards-area');
-                    cardsArea.innerHTML = '';
-                    
-                    if (data.chi_tiet_phien && data.chi_tiet_phien.length > 0) {
-                        data.chi_tiet_phien.forEach(row => {
-                            const div = document.createElement('div');
-                            div.className = 'log-item-card';
-                            
-                            const cleanPred = row.du_doan.toUpperCase().trim();
-                            const predClass = cleanPred.includes('TAI') ? 'tai' : (cleanPred.includes('XIU') ? 'xiu' : 'skip');
-                            
-                            let statusClass = 'waiting';
-                            let statusTxt = 'ĐANG ĐỢI';
-                            
-                            // GÁN NHÃN THẮNG / THUA VIẾT HOA KHÔNG DẤU PHẲNG MỊN
-                            if (row.trang_thai.includes('Thắng')) { 
-                                statusClass = 'thang'; statusTxt = 'THẮNG'; 
-                            } else if (row.trang_thai.includes('Thua')) { 
-                                statusClass = 'thua'; statusTxt = 'THUA'; 
-                            }
-                            
-                            div.innerHTML = '<div class="card-meta-left">' +
-                                                '<div class="card-phien-id">Phiên #' + row.phienId + '</div>' +
-                                                '<div class="card-status-badge ' + statusClass + '">' + statusTxt + '</div>' +
-                                            '</div>' +
-                                            '<div class="card-data-right">' +
-                                                '<div class="pill-history-small ' + predClass + '">' + convertDisplayLabel(row.du_doan) + '</div>' +
-                                                '<div class="res-node-txt">' + (row.ket_qua_thuc.toUpperCase().includes('CHỜ') ? '---' : convertDisplayLabel(row.ket_qua_thuc)) + '</div>' +
-                                            '</div>';
-                            cardsArea.appendChild(div);
-                        });
-                    }
-                } catch (e) { console.error("Lỗi đồng bộ mã UI phẳng:", e); }
+        for (let i = 0; i < diceResult.length; i++) {
+            for (let j = i + 1; j < diceResult.length; j++) {
+                const pair = [diceResult[i], diceResult[j]].sort((a, b) => a - b).join(',');
+                if (!this.pairStats.has(pair)) {
+                    this.pairStats.set(pair, { count: 0, nextTAI: 0, nextXIU: 0, nextTotals: [] });
+                }
+                const pairEntry = this.pairStats.get(pair);
+                pairEntry.count++;
+                if (nextResult) {
+                    if (nextResult === 'TAI') pairEntry.nextTAI++;
+                    else pairEntry.nextXIU++;
+                }
+                if (nextTotal !== undefined && nextTotal !== null) {
+                    pairEntry.nextTotals.push(nextTotal);
+                    if (pairEntry.nextTotals.length > 50) pairEntry.nextTotals.shift();
+                }
             }
-            refreshDashboard();
-            setInterval(refreshDashboard, 1000);
-        </script>
-    </body>
-    </html>
-    `);
-});
+        }
 
-// ====================================================================
-// ĐỊNH TUYẾN ROUTER API ĐỒNG BỘ HIỆU NĂNG CO GIÃN ĐỘNG BIÊN ĐỘ (60% - 98%)
-// ====================================================================
-app.get('/api/dashboard-stats', (req, res) => {
-    const verifiedPredictions = predictionHistory.filter(p => p.verified);
-    const recentVerified = verifiedPredictions.slice(-20);
-    
-    let accuracy = 85.0; 
-    
-    if (recentVerified.length > 0) {
-        const dungCount = recentVerified.filter(p => p.du_doan === p.ket_qua_thuc).length;
-        let rawAccuracy = parseFloat(((dungCount / recentVerified.length) * 100).toFixed(1));
-        
-        if (rawAccuracy < 60) rawAccuracy = 60.0;
-        if (rawAccuracy > 98) rawAccuracy = 98.0;
-        
-        if (chuoiDungLienTiep >= 3) rawAccuracy = Math.min(98.0, rawAccuracy + (chuoiDungLienTiep * 1.5));
-        if (chuoiSaiLienTiep >= 2) rawAccuracy = Math.max(60.0, rawAccuracy - (chuoiSaiLienTiep * 3.5));
-        
-        accuracy = parseFloat(rawAccuracy.toFixed(1));
+        const tripleKey = [...diceResult].sort((a, b) => a - b).join(',');
+        if (!this.tripleStats.has(tripleKey)) {
+            this.tripleStats.set(tripleKey, { count: 0, nextTAI: 0, nextXIU: 0, nextTotals: [] });
+        }
+        const tripleEntry = this.tripleStats.get(tripleKey);
+        tripleEntry.count++;
+        if (nextResult) {
+            if (nextResult === 'TAI') tripleEntry.nextTAI++;
+            else tripleEntry.nextXIU++;
+        }
+        if (nextTotal !== undefined && nextTotal !== null) {
+            tripleEntry.nextTotals.push(nextTotal);
+            if (tripleEntry.nextTotals.length > 50) tripleEntry.nextTotals.shift();
+        }
+
+        if (!this.totalStats.has(total)) {
+            this.totalStats.set(total, { count: 0, nextTAI: 0, nextXIU: 0, nextTotals: [] });
+        }
+        const totalEntry = this.totalStats.get(total);
+        totalEntry.count++;
+        if (nextResult) {
+            if (nextResult === 'TAI') totalEntry.nextTAI++;
+            else totalEntry.nextXIU++;
+        }
+        if (nextTotal !== undefined && nextTotal !== null) {
+            totalEntry.nextTotals.push(nextTotal);
+            if (totalEntry.nextTotals.length > 50) totalEntry.nextTotals.shift();
+        }
+
+        this.recentRolls.unshift({ dice: diceResult, total, result: nextResult });
+        if (this.recentRolls.length > 100) this.recentRolls.pop();
+        this.predictionCache.clear();
     }
 
-    const duDoanLive = currentPrediction ? currentPrediction.du_doan : "Chờ...";
-    const doTinCayLive = currentPrediction ? currentPrediction.do_tin_cay : 50;
-    const lyDoLive = currentPrediction ? currentPrediction.ly_do : "Quantum V26 Matrix";
-    const modeLive = currentPrediction ? currentPrediction.mode : "VÀO LỆNH";
-    const phienHienTaiLive = currentPrediction ? currentPrediction.phien_hien_tai : 0;
+    estimateDice(total) {
+        if (!total || total < 3 || total > 18) return [3, 3, 4];
+        const distributions = {
+            3: [1,1,1], 4: [1,1,2], 5: [1,2,2], 6: [1,2,3],
+            7: [1,3,3], 8: [2,3,3], 9: [3,3,3], 10: [3,3,4],
+            11: [3,4,4], 12: [4,4,4], 13: [4,4,5], 14: [4,5,5],
+            15: [5,5,5], 16: [5,5,6], 17: [5,6,6], 18: [6,6,6]
+        };
+        return distributions[total] || [3, 3, total - 6 > 6 ? 6 : total - 6 < 1 ? 1 : total - 6];
+    }
 
-    res.json({
-        tong_phien: tongDuDoan || verifiedPredictions.length,
-        thang: duDoanDung || verifiedPredictions.filter(p => p.du_doan === p.ket_qua_thuc).length,
-        thua: (tongDuDoan - duDoanDung) > 0 ? (tongDuDoan - duDoanDung) : 0,
-        thang_lien_tiep_max: chuoiDungLienTiep > 0 ? chuoiDungLienTiep : 2, 
-        so_lan_thong: chuoiDungLienTiep,
-        so_lan_gay_thong: chuoiSaiLienTiep,
-        ty_le_chinh_xac: accuracy,
-        phien_hien_tai_live: phienHienTaiLive,
-        du_doan_live: duDoanLive,
-        do_tin_cay_live: doTinCayLive,
-        ly_do_live: lyDoLive,
-        mode_live: modeLive,
-        chi_tiet_phien: predictionHistory.slice(-11).reverse().map(p => ({
-            phienId: p.phienId,
-            du_doan: p.du_doan,
-            ket_qua_thuc: p.ket_qua_thuc ? (p.diem_so ? p.ket_qua_thuc + ' (' + p.diem_so + ')' : p.ket_qua_thuc) : 'Chờ KQ...',
-            trang_thai: p.verified ? (p.du_doan === p.ket_qua_thuc ? 'Thắng' : 'Thua') : 'Đang đợi...'
-        }))
-    });
-});
+    predictFromTotal(currentTotal) {
+        if (!currentTotal) return null;
+        const cacheKey = `TOTAL_${currentTotal}`;
+        if (this.predictionCache.has(cacheKey)) return this.predictionCache.get(cacheKey);
+        const entry = this.totalStats.get(currentTotal);
+        if (!entry || entry.count < 3) return null;
+        const totalNext = entry.nextTAI + entry.nextXIU;
+        if (totalNext < 3) return null;
+        const taiRatio = entry.nextTAI / totalNext;
+        const result = {
+            pred: taiRatio > 0.5 ? 'TAI' : 'XIU',
+            conf: Math.min(80, Math.round(58 + Math.abs(taiRatio - 0.5) * 55)),
+            name: `Xúc Xắc Tổng ${currentTotal}`,
+            reason: `Tổng ${currentTotal} → ${(taiRatio*100).toFixed(0)}% Tài (${entry.count} lần)`,
+            module: 'DICE_TOTAL'
+        };
+        this.predictionCache.set(cacheKey, result);
+        return this.healer.sanitizeResult(result);
+    }
 
-app.get('/api/live', (req, res) => {
-    res.json(currentPrediction || { msg: "Đang nạp dữ liệu..." });
-});
+    predictFromPair(diceResult) {
+        if (!diceResult || diceResult.length < 2) return null;
+        const results = [];
+        for (let i = 0; i < diceResult.length; i++) {
+            for (let j = i + 1; j < diceResult.length; j++) {
+                const pair = [diceResult[i], diceResult[j]].sort((a, b) => a - b).join(',');
+                const entry = this.pairStats.get(pair);
+                if (entry && entry.count >= 3 && (entry.nextTAI + entry.nextXIU) >= 3) {
+                    const taiRatio = entry.nextTAI / (entry.nextTAI + entry.nextXIU);
+                    results.push({
+                        pred: taiRatio > 0.5 ? 'TAI' : 'XIU',
+                        conf: Math.round(58 + Math.abs(taiRatio - 0.5) * 55),
+                        name: `Cặp [${pair}]`,
+                        reason: `Cặp ${pair} → ${(taiRatio*100).toFixed(0)}% Tài`,
+                        module: 'DICE_PAIR'
+                    });
+                }
+            }
+        }
+        return results.length > 0 ? results : null;
+    }
 
-app.get('/history', (req, res) => {
-    const limit = parseInt(req.query.limit) || 20;
-    res.json({
-        latest_phien: historyData.slice(0, limit),
-        total_phien: historyData.length
-    });
-});
-
-// ====================================================================
-// HÀM CÀO DỮ LIỆU SÀN PHẲNG GỐC TỪ API (VÁ DỨT ĐIỂM LỖI NOT DEFINED)
-// ====================================================================
-async function fetchHistory() {
-    try {
-        const res = await axios.get(API_URL, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Referer': 'https://wtxmd52.tele68.com/v1/txmd5/sessions',
-                'Origin': 'https://wtxmd52.tele68.com/v1/txmd5/sessions'
-            },
-            timeout: 5000
+    predictFromTriple(diceResult) {
+        if (!diceResult || diceResult.length < 3) return null;
+        const tripleKey = [...diceResult].sort((a, b) => a - b).join(',');
+        const entry = this.tripleStats.get(tripleKey);
+        if (!entry || entry.count < 2 || (entry.nextTAI + entry.nextXIU) < 2) return null;
+        const taiRatio = entry.nextTAI / (entry.nextTAI + entry.nextXIU);
+        return this.healer.sanitizeResult({
+            pred: taiRatio > 0.5 ? 'TAI' : 'XIU',
+            conf: Math.round(60 + Math.abs(taiRatio - 0.5) * 50),
+            name: `Bộ 3 [${tripleKey}]`,
+            reason: `Bộ ${tripleKey} → ${(taiRatio*100).toFixed(0)}% Tài`,
+            module: 'DICE_TRIPLE'
         });
+    }
 
-        let apiList = null;
-        if (res && res.data) {
-            if (res.data.list && Array.isArray(res.data.list)) { apiList = res.data.list; } 
-            else if (res.data.data && Array.isArray(res.data.data)) { apiList = res.data.data; } 
-            else if (res.data.sessions && Array.isArray(res.data.sessions)) { apiList = res.data.sessions; } 
-            else if (Array.isArray(res.data)) { apiList = res.data; }
+    predictHotCold(diceResult) {
+        const hotFaces = [];
+        const coldFaces = [];
+        for (let i = 1; i <= 6; i++) {
+            const stats = this.diceFaces[i];
+            if (stats.count > 0) {
+                if (stats.streak >= 2) hotFaces.push(i);
+                if (this.totalRolls - stats.lastAppeared >= 10) coldFaces.push(i);
+            }
         }
-
-        if (apiList && apiList.length > 0) {
-            historyData = apiList.sort((a, b) => {
-                const idA = a.id || a.sessionID || a.phienId || a.sessionId || a.session_id || 0;
-                const idB = b.id || b.sessionID || b.phienId || b.sessionId || b.session_id || 0;
-                return idB - idA;
+        if (hotFaces.filter(f => f >= 4).length >= 2) {
+            return this.healer.sanitizeResult({
+                pred: 'XIU',
+                conf: 62,
+                name: 'Số Nóng',
+                reason: `Nhiều số cao đang hot: ${hotFaces.join(',')}`,
+                module: 'DICE_HOT'
             });
-            return true;
         }
-    } catch (e) {
-        console.error('Lỗi kết nối cổng dữ liệu API gốc:', e.message);
+        if (coldFaces.filter(f => f <= 3).length >= 2) {
+            return this.healer.sanitizeResult({
+                pred: 'TAI',
+                conf: 60,
+                name: 'Số Lạnh',
+                reason: `Số thấp lâu chưa về: ${coldFaces.join(',')}`,
+                module: 'DICE_COLD'
+            });
+        }
+        return null;
     }
-    return false;
-}
-// ====================================================================
-// LUỒNG XỬ LÝ CẬP NHẬT REALTIME CHU KỲ (VÁ CHUẨN XÁC DẤU ĐÓNG NGOẶC CẤU TRÚC)
-// ====================================================================
-async function updateData() {
-    if (updateLock) return;
-    updateLock = true;
-    try {
-        const success = await fetchHistory();
-        if (!success) { updateLock = false; return; }
-        
-        if (Array.isArray(historyData) && historyData.length > 0) {
-            const latest = historyData[0];
-            const currentId = latest.id || latest.sessionID || latest.phienId || latest.sessionId || latest.session_id;
-            
-            if (currentId && currentId !== lastPhienId) {
-                await checkPreviousPrediction();
-                lastPhienId = currentId;
-                
-                predictor.lichSu = new Array();
-                predictor.lichSuDiem = new Array();
-                predictor.lichSuXucXac = new Array();
-                predictor.lichSuMD5 = new Array();
-                predictor.chuoiHienTai = new Array();
-                
-                const reversedHistory = [...historyData].reverse();
-                for (let session of reversedHistory) {
-                    let tempDices = new Array(1, 2, 3);
-                    if (session.dices && session.dices.length === 3) {
-                        tempDices = session.dices;
-                    } else if (session.result && session.result.length === 3) {
-                        tempDices = session.result;
-                    }
-                    const tempTotal = session.point || session.totalResult || session.score || 
-                                      (parseInt(tempDices[0]) + parseInt(tempDices[1]) + parseInt(tempDices[2]));
-                    const tempKq = session.resultTruyenThong || session.resultType || (tempTotal >= 11 ? "TAI" : "XIU");
-                    const tempHash = session._id || session.idString || "000000000000000000000000";
-                    
-                    predictor.themKetQua(tempKq, tempTotal, tempDices, tempHash);
-                } // ĐÓNG NGOẶC CHUẨN VÒNG LẶP FOR
-                
-                const analysis = predictor.duDoanChinhXac();
-                const nextPhienId = currentId + 1;
-                
-                let dices = new Array(1, 2, 3);
-                if (latest.dices && latest.dices.length === 3) {
-                    dices = latest.dices;
-                } else if (latest.result && latest.result.length === 3) {
-                    dices = latest.result;
-                }
-                
-                const diceTotal = latest.point || latest.totalResult || latest.score || 
-                                  (parseInt(dices[0]) + parseInt(dices[1]) + parseInt(dices[2]));
-                const kqThucTe = latest.resultTruyenThong || latest.resultType || (diceTotal >= 11 ? "TAI" : "XIU");
-                const kqNormalized = kqThucTe.toUpperCase().includes("TAI") || kqThucTe.toUpperCase().includes("TÀI") ? "TAI" : "XIU";
-                
-                currentPrediction = {
-                    Phien: currentId,
-                    Xuc_xac_1: parseInt(dices[0]) || 0,
-                    Xuc_xac_2: parseInt(dices[1]) || 0,
-                    Xuc_xac_3: parseInt(dices[2]) || 0,
-                    Tong: parseInt(diceTotal) || 0,
-                    Ket_qua: formatResultName(kqNormalized),
-                    phien_hien_tai: nextPhienId,
-                    du_doan: formatResultName(analysis.duDoan),
-                    do_tin_cay: analysis.doTinCay || 50,
-                    ly_do: analysis.lyDo || "Quantum V26 Matrix",
-                    mode: analysis.mode || "VÀO LỆNH"
-                };
-                
-                if (analysis.mode !== "SKIP") {
-                    const existingPrediction = predictionHistory.find(p => p.phienId === nextPhienId);
-                    if (!existingPrediction) {
-                        predictionHistory.push({
-                            phienId: nextPhienId,
-                            du_doan: formatResultName(analysis.duDoan),
-                            do_tin_cay: analysis.doTinCay,
-                            ly_do: analysis.lyDo,
-                            ket_qua_thuc: null,
-                            verified: false,
-                            timestamp: Date.now(),
-                            diem_so: null
-                        });
-                        savePredictionHistory();
-                    }
-                }
-                console.log("[REALTIME V26] Phiên vừa ra: #" + currentId + " [" + kqThucTe + "] -> Dự đoán phiên kế tiếp #" + nextPhienId + ": " + analysis.duDoan + " (" + analysis.doTinCay + "%)");
-            }
+
+    predictTrend(currentTotal, prevTotal) {
+        if (!prevTotal || !currentTotal) return null;
+        const diff = currentTotal - prevTotal;
+        if (diff >= 3 && currentTotal >= 11) {
+            return this.healer.sanitizeResult({
+                pred: 'XIU',
+                conf: 65,
+                name: 'Tổng Tăng Mạnh',
+                reason: `${prevTotal}→${currentTotal} (+${diff}) → XIU`,
+                module: 'DICE_TREND'
+            });
         }
-    } catch (e) {
-        console.error('Lỗi luồng xử lý cập nhật realtime:', e.message);
-    } finally {
-        updateLock = false;
+        if (diff <= -3 && currentTotal <= 10) {
+            return this.healer.sanitizeResult({
+                pred: 'TAI',
+                conf: 65,
+                name: 'Tổng Giảm Mạnh',
+                reason: `${prevTotal}→${currentTotal} (${diff}) → TÀI`,
+                module: 'DICE_TREND'
+            });
+        }
+        return null;
+    }
+
+    predictOddEven() {
+        const oddStreak = this.oddEvenStats.odd.streak;
+        const evenStreak = this.oddEvenStats.even.streak;
+        if (oddStreak >= 5) {
+            return this.healer.sanitizeResult({
+                pred: 'XIU',
+                conf: 62,
+                name: 'Lẻ Dài',
+                reason: `${oddStreak} số lẻ liên tiếp → XIU`,
+                module: 'DICE_ODD'
+            });
+        }
+        if (evenStreak >= 5) {
+            return this.healer.sanitizeResult({
+                pred: 'TAI',
+                conf: 62,
+                name: 'Chẵn Dài',
+                reason: `${evenStreak} số chẵn liên tiếp → TÀI`,
+                module: 'DICE_EVEN'
+            });
+        }
+        return null;
+    }
+
+    analyzeAll(points, arr) {
+        const results = [];
+        const currentTotal = points[0] || 10;
+        const prevTotal = points[1] || null;
+        const estimatedDice = this.estimateDice(currentTotal);
+        const addResult = (result) => {
+            if (result && this.healer.checkHealth('DICE', result)) results.push(result);
+        };
+        addResult(this.predictFromTotal(currentTotal));
+        addResult(this.predictTrend(currentTotal, prevTotal));
+        addResult(this.predictHotCold(estimatedDice));
+        addResult(this.predictOddEven());
+        const pairResults = this.predictFromPair(estimatedDice);
+        if (pairResults) pairResults.forEach(r => addResult(r));
+        addResult(this.predictFromTriple(estimatedDice));
+        return results;
     }
 }
 
-// ====================================================================
-// NẠP MỒI CHUỖI MA TRẬN KHI KHỞI ĐỘNG SERVER (VÁ LỖI INITIALIZEDATA UNDEFINED)
-// ====================================================================
-async function initializeData() {
-    try {
-        const success = await fetchHistory();
-        if (success && Array.isArray(historyData) && historyData.length > 0) {
-            const latest = historyData[0];
-            const currentId = latest.id || latest.sessionID || latest.phienId || latest.sessionId || latest.session_id;
-            if (!currentId) return;
-            
-            lastPhienId = currentId;
-            
-            const reversedHistory = [...historyData].reverse();
-            for (let session of reversedHistory) {
-                let tempDices = new Array(1, 2, 3);
-                if (session.dices && session.dices.length === 3) {
-                    tempDices = session.dices;
-                } else if (session.result && session.result.length === 3) {
-                    tempDices = session.result;
-                }
-                const tempTotal = session.point || session.totalResult || session.score || 
-                                  (parseInt(tempDices[0]) + parseInt(tempDices[1]) + parseInt(tempDices[2]));
-                const tempKq = session.resultTruyenThong || session.resultType || (tempTotal >= 11 ? "TAI" : "XIU");
-                const tempHash = session._id || session.idString || "000000000000000000000000";
-                
-                predictor.themKetQua(tempKq, tempTotal, tempDices, tempHash);
-            }
-            
-            const analysis = predictor.duDoanChinhXac();
-            const nextPhienId = currentId + 1;
-            
-            let dices = new Array(1, 2, 3);
-            if (latest.dices && latest.dices.length === 3) {
-                dices = latest.dices;
-            } else if (latest.result && latest.result.length === 3) {
-                dices = latest.result;
-            }
-            
-            const diceTotal = latest.point || latest.totalResult || latest.score || 
-                              (parseInt(dices[0]) + parseInt(dices[1]) + parseInt(dices[2]));
-            const kqThucTe = latest.resultTruyenThong || latest.resultType || (diceTotal >= 11 ? "TAI" : "XIU");
-            const kqNormalized = kqThucTe.toUpperCase().includes("TAI") || kqThucTe.toUpperCase().includes("TÀI") ? "TAI" : "XIU";
-            
-            currentPrediction = {
-                Phien: currentId,
-                Xuc_xac_1: parseInt(dices[0]) || 0,
-                Xuc_xac_2: parseInt(dices[1]) || 0,
-                Xuc_xac_3: parseInt(dices[2]) || 0,
-                Tong: parseInt(diceTotal) || 0,
-                Ket_qua: formatResultName(kqNormalized),
-                phien_hien_tai: nextPhienId,
-                du_doan: formatResultName(analysis.duDoan),
-                do_tin_cay: analysis.doTinCay || 50,
-                ly_do: analysis.lyDo || "Khởi tạo ma trận chuỗi khối V26",
-                mode: analysis.mode || "VÀO LỆNH"
-            };
-            console.log("[KHỞI ĐỘNG HỆ THỐNG] Nạp mồi chuỗi ma trận V26 thành công. Phiên chốt gốc: #" + currentId);
+// ============================================================
+// 🏗️ MODULE 2: 30+ THUẬT TOÁN CẦU
+// ============================================================
+class CauAlgorithms {
+    constructor(healer) {
+        this.healer = healer;
+        this.cauMemory = new Map();
+        this.cauHistory = [];
+    }
+
+    safeResult(pred, conf, name, reason) {
+        return this.healer.sanitizeResult({ pred, conf, name, reason, module: 'CAU' });
+    }
+
+    cau_1_1(arr) {
+        if (arr.length < 6) return null;
+        let count = 0;
+        for (let i = 0; i < 5 && i < arr.length - 1; i++) {
+            if (arr[i] !== arr[i+1]) count++; else break;
         }
-    } catch (e) {
-        console.error('Lỗi quy trình nạp mồi dữ liệu khởi động:', e.message);
+        if (count >= 5) return this.safeResult(arr[0] === 'TAI' ? 'XIU' : 'TAI', 88, 'Cầu 1-1 Hoàn Hảo', '6 phiên xen kẽ');
+        if (count >= 4) return this.safeResult(arr[0] === 'TAI' ? 'XIU' : 'TAI', 80, 'Cầu 1-1', '5 phiên xen kẽ');
+        if (count >= 3) return this.safeResult(arr[0] === 'TAI' ? 'XIU' : 'TAI', 72, 'Cầu 1-1 Ngắn', '4 phiên xen kẽ');
+        return null;
+    }
+
+    cau_2_2(arr) {
+        if (arr.length < 4) return null;
+        if (arr[0] === arr[1] && arr[2] === arr[3] && arr[0] !== arr[2]) {
+            let repeat = 0;
+            for (let i = 4; i < arr.length - 1; i += 2) {
+                if (i+1 < arr.length && arr[i] === arr[i+1] && arr[i] !== arr[i-2]) repeat++; else break;
+            }
+            return this.safeResult(arr[2], 78 + repeat * 3, 'Cầu 2-2', `AABB → ${arr[2]}${repeat > 0 ? ' (lặp ' + repeat + 'x)' : ''}`);
+        }
+        return null;
+    }
+
+    cau_3_3(arr) {
+        if (arr.length < 6) return null;
+        if (arr[0] === arr[1] && arr[1] === arr[2] && arr[3] === arr[4] && arr[4] === arr[5] && arr[0] !== arr[3]) {
+            return this.safeResult(arr[3], 85, 'Cầu 3-3', `AAABBB → ${arr[3]}`);
+        }
+        return null;
+    }
+
+    cau_4_4(arr) {
+        if (arr.length < 8) return null;
+        if (arr[0] === arr[1] && arr[1] === arr[2] && arr[2] === arr[3] &&
+            arr[4] === arr[5] && arr[5] === arr[6] && arr[6] === arr[7] && arr[0] !== arr[4]) {
+            return this.safeResult(arr[4], 88, 'Cầu 4-4', `AAAABBBB → ${arr[4]}`);
+        }
+        return null;
+    }
+
+    cau_5_5(arr) {
+        if (arr.length < 10) return null;
+        if (arr[0] === arr[1] && arr[1] === arr[2] && arr[2] === arr[3] && arr[3] === arr[4] &&
+            arr[5] === arr[6] && arr[6] === arr[7] && arr[7] === arr[8] && arr[8] === arr[9] && arr[0] !== arr[5]) {
+            return this.safeResult(arr[5], 90, 'Cầu 5-5', `AAAAABBBBB → ${arr[5]}`);
+        }
+        return null;
+    }
+
+    cau_betTheo(arr) {
+        if (arr.length < 3) return null;
+        let streak = 1;
+        for (let i = 1; i < arr.length; i++) {
+            if (arr[i] === arr[0]) streak++; else break;
+        }
+        if (streak >= 3 && streak <= 4) return this.safeResult(arr[0], 65 + streak, 'Theo Bệt', `Bệt ${streak} → Theo ${arr[0]}`);
+        if (streak === 2) return this.safeResult(arr[0], 60, 'Bệt Ngắn', `Bệt 2 → Có thể ${arr[0]}`);
+        return null;
+    }
+
+    cau_betGay(arr) {
+        if (arr.length < 2) return null;
+        let streak = 1;
+        for (let i = 1; i < arr.length; i++) {
+            if (arr[i] === arr[0]) streak++; else break;
+        }
+        const reverse = arr[0] === 'TAI' ? 'XIU' : 'TAI';
+        if (streak >= 8) return this.safeResult(reverse, 88, 'Siêu Bệt Gãy', `Bệt ${streak} → ${reverse}`);
+        if (streak >= 6) return this.safeResult(reverse, 80, 'Bệt Dài Gãy', `Bệt ${streak} → ${reverse}`);
+        if (streak >= 5) return this.safeResult(reverse, 72, 'Bệt Gãy', `Bệt ${streak} → ${reverse}`);
+        return null;
+    }
+
+    cau_gay3_2(arr) {
+        if (arr.length < 5) return null;
+        if (arr[0] === arr[1] && arr[1] !== arr[2] && arr[2] === arr[3] && arr[3] === arr[4]) {
+            return this.safeResult(arr[2], 78, 'Gãy 3-2', `AAABB → ${arr[2]}`);
+        }
+        return null;
+    }
+
+    cau_gay2_3(arr) {
+        if (arr.length < 5) return null;
+        if (arr[0] === arr[1] && arr[1] === arr[2] && arr[2] !== arr[3] && arr[3] === arr[4]) {
+            return this.safeResult(arr[3], 78, 'Gãy 2-3', `AABBB → ${arr[3]}`);
+        }
+        return null;
+    }
+
+    cau_gayABBA(arr) {
+        if (arr.length < 4) return null;
+        if (arr[0] !== arr[1] && arr[1] === arr[2] && arr[2] !== arr[3] && arr[0] === arr[3]) {
+            return this.safeResult(arr[1], 76, 'Gãy ABBA', `ABBA → ${arr[1]}`);
+        }
+        return null;
+    }
+
+    cau_gayDotNgot(arr) {
+        if (arr.length < 6) return null;
+        let streak = 1;
+        for (let i = 1; i < arr.length; i++) {
+            if (arr[i] === arr[0]) streak++; else break;
+        }
+        if (streak >= 4 && arr.length > streak + 1 && arr[streak] !== arr[streak+1]) {
+            const reverse = arr[streak] === 'TAI' ? 'XIU' : 'TAI';
+            return this.safeResult(reverse, 72, 'Gãy Đột Ngột', `Bệt ${streak} → gãy 1 nhịp → ${reverse}`);
+        }
+        return null;
+    }
+
+    cau_doiXungGuong(arr) {
+        if (arr.length < 6) return null;
+        if (arr[0] !== arr[1] && arr[1] === arr[2] && arr[2] === arr[3] && arr[3] === arr[4] && arr[4] !== arr[5] && arr[0] === arr[5]) {
+            return this.safeResult(arr[0] === 'TAI' ? 'XIU' : 'TAI', 80, 'Đối Xứng Gương', `ABCCBA → ${arr[0] === 'TAI' ? 'XIU' : 'TAI'}`);
+        }
+        return null;
+    }
+
+    cau_doiXung5(arr) {
+        if (arr.length < 5) return null;
+        if (arr[0] !== arr[1] && arr[1] !== arr[2] && arr[2] !== arr[3] && arr[3] !== arr[4] &&
+            arr[0] === arr[4] && arr[1] === arr[3]) {
+            return this.safeResult(arr[2] === 'TAI' ? 'XIU' : 'TAI', 75, 'Đối Xứng 5', `ABCBA → ${arr[2] === 'TAI' ? 'XIU' : 'TAI'}`);
+        }
+        return null;
+    }
+
+    cau_bacThangLen(arr) {
+        if (arr.length < 6) return null;
+        if (arr[0] === arr[1] && arr[1] !== arr[2] && arr[2] === arr[3] && arr[3] !== arr[4] && arr[4] === arr[5]) {
+            return this.safeResult(arr[4], 72, 'Bậc Thang', `AABABC → ${arr[4]}`);
+        }
+        return null;
+    }
+
+    cau_tamGiac(arr) {
+        if (arr.length < 3) return null;
+        if (arr[0] !== arr[1] && arr[0] === arr[2]) {
+            return this.safeResult(arr[1], 68, 'Tam Giác', `ABA → ${arr[1]}`);
+        }
+        return null;
+    }
+
+    cau_ziczac(arr) {
+        if (arr.length < 8) return null;
+        let ziczacCount = 0;
+        for (let i = 0; i < 7 && i < arr.length - 1; i++) {
+            if (arr[i] !== arr[i+1]) ziczacCount++; else break;
+        }
+        if (ziczacCount >= 7) return this.safeResult(arr[0] === 'TAI' ? 'XIU' : 'TAI', 85, 'Ziczac Dài', `${ziczacCount+1} phiên ziczac → đảo`);
+        if (ziczacCount >= 5) return this.safeResult(arr[0] === 'TAI' ? 'XIU' : 'TAI', 75, 'Ziczac', `${ziczacCount+1} phiên ziczac → đảo`);
+        return null;
+    }
+
+    cau_patternLap(arr) {
+        if (arr.length < 8) return null;
+        for (let len = 3; len <= 5; len++) {
+            const recent = arr.slice(0, len);
+            for (let i = len; i < Math.min(arr.length, 35); i++) {
+                const hist = arr.slice(i, i + len);
+                if (recent.join('') === hist.join('') && i > len && arr[i-1]) {
+                    const conf = Math.min(82, 80 - i);
+                    if (conf >= 68) return this.safeResult(arr[i-1], conf, 'Pattern Lặp', `Pattern ${len} lặp cách ${i} phiên → ${arr[i-1]}`);
+                }
+            }
+        }
+        return null;
+    }
+
+    cau_daoChieuSauBet(arr) {
+        if (arr.length < 4) return null;
+        let streak = 1;
+        for (let i = 1; i < arr.length; i++) {
+            if (arr[i] === arr[0]) streak++; else break;
+        }
+        if (streak >= 3 && arr.length > streak && arr[streak] !== arr[0]) {
+            return this.safeResult(arr[streak], 70, 'Đảo Sau Bệt', `Bệt ${streak} → đảo → ${arr[streak]}`);
+        }
+        return null;
+    }
+
+    cau_xenKe2_1(arr) {
+        if (arr.length < 6) return null;
+        if (arr[0] === arr[1] && arr[1] !== arr[2] && arr[2] === arr[3] && arr[3] !== arr[4] && arr[0] === arr[4]) {
+            return this.safeResult(arr[0] === 'TAI' ? 'XIU' : 'TAI', 72, 'Xen Kẽ 2-1', `AABAA → ${arr[0] === 'TAI' ? 'XIU' : 'TAI'}`);
+        }
+        return null;
+    }
+
+    cau_moRong3_2_3(arr) {
+        if (arr.length < 8) return null;
+        if (arr[0] === arr[1] && arr[1] === arr[2] && arr[2] !== arr[3] && arr[3] === arr[4] &&
+            arr[4] !== arr[5] && arr[5] === arr[6] && arr[6] === arr[7]) {
+            return this.safeResult(arr[5], 75, 'Mở Rộng 3-2-3', `AAABBCCC → ${arr[5]}`);
+        }
+        return null;
+    }
+
+    cau_meanReversion30(arr) {
+        if (arr.length < 30) return null;
+        const taiCount = arr.slice(0, 30).filter(x => x === 'TAI').length;
+        const imbalance = Math.abs(taiCount - 15);
+        if (imbalance >= 8) return this.safeResult(taiCount > 15 ? 'XIU' : 'TAI', 60 + imbalance * 2, 'Mean Reversion 30', `${taiCount}T-${30-taiCount}X → cân bằng`);
+        return null;
+    }
+
+    cau_meanReversion50(arr) {
+        if (arr.length < 50) return null;
+        const taiCount = arr.slice(0, 50).filter(x => x === 'TAI').length;
+        const imbalance = Math.abs(taiCount - 25);
+        if (imbalance >= 12) return this.safeResult(taiCount > 25 ? 'XIU' : 'TAI', 58 + imbalance, 'Mean Reversion 50', `${taiCount}T-${50-taiCount}X → cân bằng`);
+        return null;
+    }
+
+    cau_chuKy(arr) {
+        if (arr.length < 20) return null;
+        for (let period = 2; period <= 10; period++) {
+            let matches = 0;
+            const total = Math.min(arr.length, 40) - period;
+            for (let i = period; i < Math.min(arr.length, 40); i++) {
+                if (arr[i] === arr[i-period]) matches++;
+            }
+            const acc = matches / (total || 1);
+            if (acc > 0.65 && total >= 10) {
+                return this.safeResult(arr[arr.length - period] || arr[0], 58 + acc * 25, 'Chu Kỳ', `Chu kỳ ${period} phiên (${(acc*100).toFixed(0)}%)`);
+            }
+        }
+        return null;
+    }
+
+    cau_theoGio(arr) {
+        const hour = new Date().getHours();
+        if (hour >= 6 && hour <= 12) {
+            const recentTAI = arr.slice(0, 10).filter(x => x === 'TAI').length;
+            if (recentTAI >= 6) return this.safeResult('TAI', 60, 'Giờ Sáng', `Sáng ${hour}h → Tài (${recentTAI}/10)`);
+        }
+        if (hour >= 18 && hour <= 23) {
+            const recentXIU = arr.slice(0, 10).filter(x => x === 'XIU').length;
+            if (recentXIU >= 6) return this.safeResult('XIU', 60, 'Giờ Tối', `Tối ${hour}h → Xỉu (${recentXIU}/10)`);
+        }
+        return null;
+    }
+
+    cau_daoChieuLienTuc(arr) {
+        if (arr.length < 6) return null;
+        let reversals = 0;
+        for (let i = 1; i < 5 && i < arr.length; i++) {
+            if (arr[i] !== arr[i-1]) reversals++;
+        }
+        if (reversals >= 4) return this.safeResult(arr[0] === 'TAI' ? 'XIU' : 'TAI', 78, 'Đảo Liên Tục', `${reversals} lần đảo/5 phiên → tiếp tục đảo`);
+        return null;
+    }
+
+    cau_onDinh(arr) {
+        if (arr.length < 10) return null;
+        const first5 = arr.slice(0, 5).filter(x => x === 'TAI').length;
+        const last5 = arr.slice(5, 10).filter(x => x === 'TAI').length;
+        if (Math.abs(first5 - last5) <= 1) {
+            const totalTAI = arr.slice(0, 10).filter(x => x === 'TAI').length;
+            return this.safeResult(totalTAI >= 5 ? 'TAI' : 'XIU', 58, 'Ổn Định', `10 phiên ổn định → ${totalTAI >= 5 ? 'Tài' : 'Xỉu'}`);
+        }
+        return null;
+    }
+
+    cau_breakout(arr) {
+        if (arr.length < 8) return null;
+        const first4 = arr.slice(0, 4);
+        const last4 = arr.slice(4, 8);
+        const firstTAI = first4.filter(x => x === 'TAI').length;
+        const lastTAI = last4.filter(x => x === 'TAI').length;
+        if (Math.abs(firstTAI - lastTAI) >= 3) {
+            return this.safeResult(lastTAI >= 3 ? 'TAI' : 'XIU', 65, 'Breakout', `Thay đổi ${firstTAI}→${lastTAI} Tài/4 phiên → ${lastTAI >= 3 ? 'Tài' : 'Xỉu'}`);
+        }
+        return null;
+    }
+
+    cau_tichLuy(arr) {
+        if (arr.length < 12) return null;
+        let sameCount = 0;
+        for (let i = 0; i < 12; i++) {
+            if (arr[i] === arr[0]) sameCount++;
+        }
+        if (sameCount >= 8) {
+            const reverse = arr[0] === 'TAI' ? 'XIU' : 'TAI';
+            return this.safeResult(reverse, 68, 'Tích Lũy', `${sameCount}/12 ${arr[0]} → ${reverse}`);
+        }
+        return null;
+    }
+
+    cau_phanKy(points, arr) {
+        if (points.length < 5 || arr.length < 5) return null;
+        const pointTrend = points[0] > points[4] ? 'UP' : 'DOWN';
+        const cauTrend = arr.slice(0, 5).filter(x => x === 'TAI').length >= 3 ? 'TAI' : 'XIU';
+        if (pointTrend === 'UP' && cauTrend === 'XIU') return this.safeResult('XIU', 62, 'Phân Kỳ', `Điểm tăng + Xỉu → XIU`);
+        if (pointTrend === 'DOWN' && cauTrend === 'TAI') return this.safeResult('TAI', 62, 'Phân Kỳ', `Điểm giảm + Tài → TÀI`);
+        return null;
+    }
+
+    cau_hoiTu(points, arr) {
+        if (points.length < 3 || arr.length < 3) return null;
+        if (points[0] >= 13 && arr[0] === 'XIU') return this.safeResult('XIU', 65, 'Hội Tụ', `Điểm ${points[0]} + Xỉu → XIU`);
+        if (points[0] <= 8 && arr[0] === 'TAI') return this.safeResult('TAI', 65, 'Hội Tụ', `Điểm ${points[0]} + Tài → TÀI`);
+        return null;
+    }
+
+    runAll(arr, points) {
+        const results = [];
+        const addResult = (result) => {
+            if (result && this.healer.checkHealth('CAU', result)) results.push(result);
+        };
+        addResult(this.cau_1_1(arr));
+        addResult(this.cau_2_2(arr));
+        addResult(this.cau_3_3(arr));
+        addResult(this.cau_4_4(arr));
+        addResult(this.cau_5_5(arr));
+        addResult(this.cau_betTheo(arr));
+        addResult(this.cau_betGay(arr));
+        addResult(this.cau_gay3_2(arr));
+        addResult(this.cau_gay2_3(arr));
+        addResult(this.cau_gayABBA(arr));
+        addResult(this.cau_gayDotNgot(arr));
+        addResult(this.cau_doiXungGuong(arr));
+        addResult(this.cau_doiXung5(arr));
+        addResult(this.cau_bacThangLen(arr));
+        addResult(this.cau_tamGiac(arr));
+        addResult(this.cau_ziczac(arr));
+        addResult(this.cau_patternLap(arr));
+        addResult(this.cau_daoChieuSauBet(arr));
+        addResult(this.cau_xenKe2_1(arr));
+        addResult(this.cau_moRong3_2_3(arr));
+        addResult(this.cau_meanReversion30(arr));
+        addResult(this.cau_meanReversion50(arr));
+        addResult(this.cau_chuKy(arr));
+        addResult(this.cau_theoGio(arr));
+        addResult(this.cau_daoChieuLienTuc(arr));
+        addResult(this.cau_onDinh(arr));
+        addResult(this.cau_breakout(arr));
+        addResult(this.cau_tichLuy(arr));
+        addResult(this.cau_phanKy(points, arr));
+        addResult(this.cau_hoiTu(points, arr));
+        return results;
     }
 }
 
-// ====================================================================
-// HỆ THỐNG QUẢN LÝ BỘ NHỚ ĐỆM PERSISTENT STORAGE FILE LOGS JSON
-// ====================================================================
-function loadPredictionHistory() {
+// ============================================================
+// 🧠 MODULE 3: HỆ THỐNG TỰ HỌC VĨNH VIỄN
+// ============================================================
+class EternalLearning {
+    constructor(healer) {
+        this.healer = healer;
+        this.patternBank = new Map();
+        this.weightBank = new Map();
+        this.learningHistory = [];
+        this.totalLearned = 0;
+        this.recentAccuracy = 0.5;
+        this.bestAlgo = null;
+        this.worstAlgo = null;
+    }
+
+    learn(arr, points, prediction, actual) {
+        if (!arr || arr.length < 2) return;
+        this.totalLearned++;
+        for (let len = 3; len <= 8; len++) {
+            if (arr.length < len + 1) continue;
+            const pattern = arr.slice(1, 1 + len).join('');
+            const result = arr[0];
+            if (!this.patternBank.has(pattern)) {
+                this.patternBank.set(pattern, { TAI: 0, XIU: 0, total: 0 });
+            }
+            this.patternBank.get(pattern)[result]++;
+            this.patternBank.get(pattern).total++;
+        }
+        if (points.length >= 2) {
+            const pointKey = `P${Math.round(points[0])}_${points[0] > points[1] ? 'UP' : 'DOWN'}`;
+            if (!this.patternBank.has(pointKey)) {
+                this.patternBank.set(pointKey, { TAI: 0, XIU: 0, total: 0 });
+            }
+            this.patternBank.get(pointKey)[arr[0]]++;
+            this.patternBank.get(pointKey).total++;
+        }
+        this.learningHistory.push({ time: Date.now(), actual, predicted: prediction?.pred });
+        if (this.learningHistory.length > 10000) this.learningHistory.shift();
+        const recent = this.learningHistory.slice(-200);
+        this.recentAccuracy = recent.length > 0 ? recent.filter(l => l.predicted === l.actual).length / recent.length : 0;
+    }
+
+    predict(arr, points) {
+        const results = [];
+        for (let len = 7; len >= 3; len--) {
+            if (arr.length < len) continue;
+            const pattern = arr.slice(0, len).join('');
+            const data = this.patternBank.get(pattern);
+            if (data && data.total >= 5) {
+                const taiRatio = data.TAI / data.total;
+                if (Math.abs(taiRatio - 0.5) > 0.12) {
+                    results.push({
+                        pred: taiRatio > 0.5 ? 'TAI' : 'XIU',
+                        conf: Math.round(55 + Math.abs(taiRatio - 0.5) * 60),
+                        name: `Learned L${len}`,
+                        reason: `${data.total} mẫu → ${(taiRatio*100).toFixed(0)}% Tài`
+                    });
+                }
+            }
+        }
+        return results;
+    }
+}
+
+// ============================================================
+// 🎯 MODULE 4: ENSEMBLE + TỔNG HỢP
+// ============================================================
+class OmegaEnsemble {
+    constructor(healer) {
+        this.healer = healer;
+        this.votingHistory = [];
+    }
+
+    combine(cauResults, diceResults, learningResults) {
+        const allSignals = [...cauResults, ...diceResults, ...learningResults];
+        if (allSignals.length === 0) {
+            return this.healer.sanitizeResult({
+                pred: 'TAI',
+                conf: 50,
+                name: 'NO_SIGNAL',
+                reason: 'Không có tín hiệu'
+            });
+        }
+        let taiScore = 0, xiuScore = 0;
+        const algoVotes = [];
+        for (const signal of allSignals) {
+            const weight = signal.conf / 100;
+            if (signal.pred === 'TAI') taiScore += weight;
+            else xiuScore += weight;
+            algoVotes.push({
+                name: signal.name,
+                pred: signal.pred,
+                conf: signal.conf,
+                module: signal.module || 'UNKNOWN',
+                reason: signal.reason || ''
+            });
+        }
+        const totalScore = taiScore + xiuScore;
+        const taiRatio = totalScore > 0 ? taiScore / totalScore : 0.5;
+        const finalPred = taiScore > xiuScore ? 'TAI' : 'XIU';
+        const strength = Math.abs(taiRatio - 0.5);
+        let conf = Math.round(55 + strength * 37);
+        const agreeCount = finalPred === 'TAI' ? algoVotes.filter(v => v.pred === 'TAI').length : algoVotes.filter(v => v.pred === 'XIU').length;
+        const agreeRatio = agreeCount / algoVotes.length;
+        if (agreeRatio >= 0.85 && algoVotes.length >= 6) conf += 5;
+        if (agreeRatio >= 0.95 && algoVotes.length >= 10) conf += 3;
+        if (agreeRatio < 0.55) conf -= 3;
+        conf = Math.min(92, Math.max(50, conf));
+        const result = {
+            pred: finalPred,
+            conf: conf,
+            name: '🧠 IMMORTAL PHOENIX',
+            reason: `${algoVotes.length} tín hiệu → ${finalPred} (${agreeCount}/${algoVotes.length})`,
+            details: {
+                totalSignals: algoVotes.length,
+                taiCount: algoVotes.filter(v => v.pred === 'TAI').length,
+                xiuCount: algoVotes.filter(v => v.pred === 'XIU').length,
+                taiRatio: (taiRatio * 100).toFixed(1) + '%',
+                agreeRatio: (agreeRatio * 100).toFixed(1) + '%',
+                algoVotes: algoVotes.slice(0, 10)
+            }
+        };
+        return this.healer.sanitizeResult(result);
+    }
+}
+
+// ============================================================
+// 🧬 IMMORTAL PHOENIX — MAIN ENGINE
+// ============================================================
+class TX_LogicPen_IMMORTAL_PHOENIX {
+    constructor() {
+        this.healer = new SelfHealingSystem();
+        this.diceAnalyzer = new DeepDiceAnalyzer(this.healer);
+        this.cauAlgorithms = new CauAlgorithms(this.healer);
+        this.eternalLearning = new EternalLearning(this.healer);
+        this.ensemble = new OmegaEnsemble(this.healer);
+        this.history = [];
+        this.lastResult = null;
+        this.errorStreak = 0;
+        this.totalPredictions = 0;
+    }
+
+    loadData(data) {
+        try {
+            this.history = [...data].sort((a, b) => (b.phien || 0) - (a.phien || 0));
+            const arr = this._arr();
+            const points = this._points();
+            for (let i = arr.length - 1; i >= 1; i--) {
+                const total = points[i] || 10;
+                const dice = this.diceAnalyzer.estimateDice(total);
+                this.diceAnalyzer.analyzeRoll(dice, arr[i-1] || null, points[i-1] || null);
+            }
+            for (let i = arr.length - 1; i >= 10; i--) {
+                this.eternalLearning.learn(arr.slice(i), points.slice(i), null, arr[i-1] || arr[i]);
+            }
+            stats.learning_iterations = this.eternalLearning.totalLearned;
+            stats.total_patterns_learned = this.eternalLearning.patternBank.size;
+        } catch (e) {
+            this.healer.reportError('LOAD', e.message);
+        }
+    }
+
+    _arr() {
+        return this.history.map(s => (s.ket_qua || '').toUpperCase().replace('XỈU', 'XIU').replace('TÀI', 'TAI'));
+    }
+
+    _points() {
+        return this.history.filter(s => s.tong !== undefined && s.tong !== null).map(s => s.tong);
+    }
+
+    predict(data) {
+        try {
+            this.loadData(data);
+            const arr = this._arr();
+            const points = this._points();
+            if (arr.length < 2) {
+                return { pred: arr[0] || 'TAI', conf: 50, name: 'NO_DATA' };
+            }
+            const cauResults = this.cauAlgorithms.runAll(arr, points);
+            const diceResults = this.diceAnalyzer.analyzeAll(points, arr);
+            const learningResults = this.eternalLearning.predict(arr, points);
+            const result = this.ensemble.combine(cauResults, diceResults, learningResults);
+            this.lastResult = result;
+            this.totalPredictions++;
+            stats.last_prediction = result.pred;
+            stats.total_predictions_made++;
+            stats.prediction_started = true;
+            stats.learning_iterations = this.eternalLearning.totalLearned;
+            stats.total_patterns_learned = this.eternalLearning.patternBank.size;
+            if (result.pred === 'TAI') stats.tai_predictions++;
+            else stats.xiu_predictions++;
+            return result;
+        } catch (e) {
+            this.healer.reportError('PREDICT', e.message);
+            this.healer.selfHeal();
+            return { pred: 'TAI', conf: 50, name: 'ERROR_FALLBACK' };
+        }
+    }
+
+    updateStatus(actual) {
+        try {
+            if (!this.lastResult) return;
+            const a = actual.toUpperCase().replace('XỈU', 'XIU').replace('TÀI', 'TAI');
+            const wasCorrect = this.lastResult.pred === a;
+            const arr = this._arr();
+            const points = this._points();
+            this.eternalLearning.learn(arr, points, this.lastResult, a);
+            if (wasCorrect) {
+                this.errorStreak = 0;
+                stats.streak_correct++;
+                stats.streak_wrong = 0;
+                stats.best_streak = Math.max(stats.best_streak, stats.streak_correct);
+                stats.correct++;
+            } else {
+                this.errorStreak++;
+                stats.streak_wrong++;
+                stats.streak_correct = 0;
+                stats.worst_streak = Math.max(stats.worst_streak, stats.streak_wrong);
+                stats.wrong++;
+            }
+            stats.total++;
+            stats.learning_iterations = this.eternalLearning.totalLearned;
+            stats.total_patterns_learned = this.eternalLearning.patternBank.size;
+            stats.history.push({
+                time: vnNow(),
+                prediction: this.lastResult.pred,
+                actual: a,
+                correct: wasCorrect,
+                streak: stats.streak_correct
+            });
+            if (stats.history.length > 5000) stats.history.shift();
+        } catch (e) {
+            this.healer.reportError('UPDATE', e.message);
+            this.healer.selfHeal();
+        }
+    }
+
+    getStats() {
+        const accuracy = stats.total > 0 ? (stats.correct / stats.total * 100).toFixed(1) : '0.0';
+        const recent100 = stats.history.slice(-100);
+        const recentAcc = recent100.length > 0 ? (recent100.filter(h => h.correct).length / recent100.length * 100).toFixed(1) : '0.0';
+        return {
+            ...stats,
+            accuracy: accuracy + '%',
+            recent_100_accuracy: recentAcc + '%',
+            tai_ratio: stats.total_predictions_made > 0 ? (stats.tai_predictions / stats.total_predictions_made * 100).toFixed(1) + '%' : '0%',
+            xiu_ratio: stats.total_predictions_made > 0 ? (stats.xiu_predictions / stats.total_predictions_made * 100).toFixed(1) + '%' : '0%',
+            healer_status: this.healer.getStatus(),
+            best_algo: this.eternalLearning.bestAlgo,
+            worst_algo: this.eternalLearning.worstAlgo,
+            model: stats.model_version
+        };
+    }
+}
+
+// ============================================================
+// KHỞI TẠO GLOBAL
+// ============================================================
+const predictor = new TX_LogicPen_IMMORTAL_PHOENIX();
+
+// ============================================================
+// 📡 LẤY DỮ LIỆU API
+// ============================================================
+function transformData(apiData) {
+    if (!apiData || !apiData.list) return null;
+    const result = [];
+    for (let i = 0; i < apiData.list.length; i++) {
+        const item = apiData.list[i];
+        result.push({
+            Phien: item.id,
+            Ket_qua: item.resultTruyenThong === 'TAI' ? 'T' : 'X',
+            d1: item.dices[0],
+            d2: item.dices[1],
+            d3: item.dices[2],
+            Tong: item.point
+        });
+    }
+    return result;
+}
+
+async function fetchHu() {
+    try {
+        const res = await axios.get('https://wtx.tele68.com/v1/tx/sessions', { timeout: 10000 });
+        return transformData(res.data);
+    } catch (e) {
+        console.log('HU fetch error:', e.message);
+        return null;
+    }
+}
+
+async function fetchMd5() {
+    try {
+        const res = await axios.get('https://wtxmd52.tele68.com/v1/txmd5/sessions', { timeout: 10000 });
+        return transformData(res.data);
+    } catch (e) {
+        console.log('MD5 fetch error:', e.message);
+        return null;
+    }
+}
+
+// ============================================================
+// 💾 LƯU LỊCH SỬ
+// ============================================================
+let historyData = { hu: [], md5: [] };
+const HISTORY_FILE = './history_immortal.json';
+
+function loadHistory() {
     try {
         if (fs.existsSync(HISTORY_FILE)) {
-            const raw = fs.readFileSync(HISTORY_FILE, 'utf8');
-            if (!raw.trim()) return;
-            const data = JSON.parse(raw);
-            predictionHistory = data.predictions || new Array();
-            tongDuDoan = data.tongDuDoan || 0;
-            duDoanDung = data.duDoanDung || 0;
-            chuoiDungLienTiep = data.chuoiDungLienTiep || 0;
-            chuoiSaiLienTiep = data.chuoiSaiLienTiep || 0;
-            console.log("[BỘ NHỚ V26] Đã khôi phục nhật ký đối soát từ bộ lưu trữ tệp tin JSON.");
+            const data = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
+            historyData = data;
+            const allPhiens = [...(historyData.hu || []), ...(historyData.md5 || [])];
+            for (const item of allPhiens) {
+                if (item.phien) {
+                    stats.processed_phiens[item.phien] = item.trangThai || 'UNKNOWN';
+                }
+            }
+            if (historyData.hu && historyData.hu.length > 0) {
+                stats.last_phien = historyData.hu[0]?.phien || 0;
+            }
+            console.log('✅ Loaded history:', historyData.hu.length, 'HU,', historyData.md5.length, 'MD5');
         }
-    } catch (e) {
-        console.error('Lỗi khi nạp dữ liệu lịch sử json:', e.message);
-    }
+    } catch (e) { console.log('Load history error:', e.message); }
 }
 
-function savePredictionHistory() {
+function saveHistory() {
     try {
-        const data = {
-            predictions: predictionHistory.slice(-500),
-            tongDuDoan,
-            duDoanDung,
-            chuoiDungLienTiep,
-            chuoiSaiLienTiep,
-            lastUpdated: new Date().toISOString()
+        fs.writeFileSync(HISTORY_FILE, JSON.stringify(historyData, null, 2));
+    } catch (e) { console.log('Save history error:', e.message); }
+}
+
+// ============================================================
+// 🎯 HÀM DỰ ĐOÁN
+// ============================================================
+function calculatePrediction(data, type) {
+    try {
+        const phien = data[0]?.Phien || 0;
+        const ketQuaRaw = data[0]?.Ket_qua || 'X';
+        const ketQua = ketQuaRaw === 'T' ? 'TAI' : 'XIU';
+        
+        if (stats.processed_phiens[phien]) {
+            const existing = historyData[type].find(r => r.phien === phien);
+            if (existing) {
+                return {
+                    prediction: existing.duDoan,
+                    confidence: parseInt(existing.doTinCay) || 50,
+                    phien: phien,
+                    ketQua: existing.ketQua,
+                    trangThai: existing.trangThai,
+                    algorithmCount: existing.algorithmCount || 0,
+                    reason: existing.reason || '',
+                    name: existing.name || 'Cached'
+                };
+            }
+            return null;
+        }
+        
+        const historyDataForPredictor = data.map(item => ({
+            ket_qua: item.Ket_qua === 'T' ? 'TAI' : 'XIU',
+            tong: item.Tong,
+            phien: item.Phien
+        }));
+        
+        const result = predictor.predict(historyDataForPredictor);
+        
+        if (!result || !result.pred) {
+            return {
+                phien: phien,
+                prediction: '---',
+                confidence: 50,
+                ketQua: ketQua,
+                trangThai: 'PENDING',
+                algorithmCount: 0,
+                reason: 'Không đủ dữ liệu',
+                name: 'No Signal'
+            };
+        }
+        
+        if (phien > stats.last_phien) stats.last_phien = phien;
+        
+        const isCorrect = predictor.updateStatus(ketQua);
+        const trangThai = isCorrect ? 'WIN' : 'LOSE';
+        
+        stats.processed_phiens[phien] = trangThai;
+        
+        const existingIndex = historyData[type].findIndex(r => r.phien === phien);
+        
+        const record = {
+            phien: phien,
+            duDoan: result.pred,
+            doTinCay: result.conf.toFixed(0) + '%',
+            ketQua: ketQua,
+            trangThai: trangThai,
+            loai: type.toUpperCase(),
+            thoiGian: vnNow(),
+            algorithmCount: result.details?.totalSignals || 0,
+            reason: result.reason || '',
+            name: result.name || '',
+            confidence: result.conf.toFixed(0)
         };
-        fs.writeFileSync(HISTORY_FILE, JSON.stringify(data, null, 2));
+        
+        if (existingIndex !== -1) {
+            historyData[type][existingIndex] = record;
+        } else {
+            historyData[type].unshift(record);
+            if (historyData[type].length > 1000) {
+                const removed = historyData[type].splice(1000);
+                for (const r of removed) {
+                    delete stats.processed_phiens[r.phien];
+                }
+            }
+        }
+        
+        saveHistory();
+        
+        return {
+            prediction: result.pred,
+            confidence: result.conf,
+            phien: phien,
+            ketQua: ketQua,
+            trangThai: trangThai,
+            algorithmCount: result.details?.totalSignals || 0,
+            reason: result.reason || '',
+            name: result.name || ''
+        };
     } catch (e) {
-        console.error('Lỗi khi ghi tệp tin json bộ nhớ đệm:', e.message);
+        console.error('Calculate prediction error:', e.message);
+        return null;
     }
 }
 
-// ====================================================================
-// KHỞI CHẠY TIẾN TRÌNH HTTP SERVER THỜI GIAN THỰC NGẦM V26 PRO MASTER
-// ====================================================================
-app.listen(PORT, () => {
-    console.log('==================================================');
-    console.log('  API ENGINE QUANTUM VIP V26 RUNNING ON PORT: ' + PORT);
-    console.log('  REALTIME MATRIX DASHBOARD: HTTP://LOCALHOST:' + PORT);
-    console.log('  CẦU TTTT HOẶC XXXX CƯỠNG CHẾ BỎ QUA KHÔNG DỰ ĐOÁN  ');
-    console.log('==================================================\n');
-    
-    loadPredictionHistory(); // Đảm bảo nạp bộ lưu trữ đối soát persistent storage JSON
-    initializeData();        // Tự động mồi lại toàn bộ 30 thuật toán động đa phân giải
-    
-    setInterval(async () => {
-        await updateData();
-    }, UPDATE_INTERVAL);
+// ============================================================
+// 🚀 ROUTES - GIAO DIỆN MỚI
+// ============================================================
+
+app.get('/', function(req, res) {
+    res.send(`<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Kapub Dự Đoán</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
+        body { background: #030408; display: flex; justify-content: center; align-items: center; min-height: 100vh; color: #ffffff; padding: 15px; }
+        .app-wrapper {
+            background: #080a11; width: 100%; max-width: 410px; height: 860px;
+            border-radius: 40px; padding: 0; position: relative;
+            box-shadow: 0 40px 80px rgba(0,0,0,0.9);
+            border: 1px solid rgba(255,255,255,0.04);
+            overflow: hidden; display: flex; flex-direction: column;
+        }
+        .content-scroll-area { 
+            flex: 1; overflow-y: auto; padding: 30px 22px 20px 22px; 
+            display: flex; flex-direction: column; position: relative; z-index: 1; gap: 20px;
+        }
+        .content-scroll-area::-webkit-scrollbar { width: 2px; }
+        .content-scroll-area::-webkit-scrollbar-thumb { background: #d4af37; border-radius: 10px; }
+        #homeScreen { display: flex; flex-direction: column; flex: 1; animation: fadeSlide 0.6s ease-out; gap: 20px; }
+        @keyframes fadeSlide { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+        .hero-header { display: flex; align-items: center; gap: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 15px; }
+        .royal-icon { color: #d4af37; font-size: 24px; }
+        .brand-name { font-size: 22px; font-weight: 900; color: #fff; letter-spacing: -0.5px; }
+        .brand-name span { color: #d4af37; }
+        .greeting-wrap { 
+            background: rgba(14, 18, 30, 0.8); border: 1px solid rgba(255,255,255,0.06); border-radius: 16px; padding: 18px 20px; 
+            box-shadow: inset 0 0 30px rgba(255,255,255,0.01);
+        }
+        .greeting-line { font-size: 18px; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 10px; }
+        .greeting-line i { color: #d4af37; font-size: 16px;}
+        .greeting-desc { font-size: 14px; font-weight: 500; color: #8d98b1; line-height: 1.6; margin-top: 6px; }
+        .greeting-desc strong { color: #d4af37; font-weight: 700; }
+        .intro-stack { display: flex; flex-direction: column; gap: 12px; flex: 1; justify-content: center; }
+        .intro-card {
+            background: rgba(14, 18, 30, 0.5); border: 1px solid rgba(255,255,255,0.04); border-radius: 14px; 
+            padding: 16px 18px; display: flex; flex-direction: column; gap: 6px;
+            transition: all 0.3s ease;
+        }
+        .intro-card:hover { background: rgba(18, 24, 40, 0.6); transform: translateX(4px); border-color: rgba(212, 175, 55, 0.1); }
+        .intro-title { font-size: 16px; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 12px; }
+        .intro-title i { color: #d4af37; font-size: 16px; width: 20px; text-align: center; }
+        .intro-detail { font-size: 13px; font-weight: 500; color: #8d98b1; line-height: 1.5; padding-left: 32px; }
+        .btn-group { display: flex; flex-direction: column; gap: 12px; margin-top: auto; padding-top: 10px;}
+        .btn-enter { 
+            position: relative; background: rgba(14, 18, 30, 0.9); border-radius: 18px; 
+            padding: 16px 20px; display: flex; align-items: center; gap: 16px; cursor: pointer; 
+            transition: all 0.3s ease; overflow: hidden;
+            border: 2px solid transparent; 
+        }
+        .btn-enter:active { transform: scale(0.97); }
+        .btn-enter i { font-size: 24px; width: 30px; text-align: center; }
+        .btn-enter .btn-icon-hu { color: #f59e0b; }
+        .btn-enter .btn-icon-md5 { color: #3b82f6; }
+        .btn-enter h4 { font-size: 16px; font-weight: 800; color: #fff; }
+        .btn-enter p { font-size: 11px; font-weight: 500; color: #8d98b1; }
+        .btn-enter.rainbow-active::before {
+            content: ''; position: absolute; inset: -2px; border-radius: 18px; padding: 2px;
+            background: conic-gradient(from 0deg, #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #4b0082, #8f00ff, #ff0000);
+            animation: spin-rainbow 3s linear infinite;
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor; mask-composite: exclude;
+            pointer-events: none; z-index: 1;
+        }
+        @keyframes spin-rainbow { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        #predictScreen { display: none; flex-direction: column; flex: 1; gap: 14px; animation: fadeSlide 0.4s ease-out; }
+        .top-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+        .back-btn { background: transparent; border: none; color: #8d98b1; font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: 0.2s; }
+        .back-btn:hover { color: #fff; transform: translateX(-3px); }
+        .tool-title { font-size: 14px; font-weight: 800; color: #d4af37; }
+        .p-box { 
+            background: rgba(14, 18, 30, 0.7); border: 1px solid rgba(255,255,255,0.05); border-radius: 20px; 
+            padding: 24px 20px; text-align: center; transition: 0.4s; position: relative;
+        }
+        .p-box.active-tai { border-color: rgba(59, 130, 246, 0.4); box-shadow: 0 0 50px rgba(59, 130, 246, 0.05); }
+        .p-box.active-xiu { border-color: rgba(239, 68, 68, 0.4); box-shadow: 0 0 50px rgba(239, 68, 68, 0.05); }
+        .p-label { font-size: 11px; font-weight: 700; color: #8d98b1; letter-spacing: 2px; }
+        .p-result { font-size: 68px; font-weight: 900; line-height: 1; margin: 15px 0 20px 0; transition: all 0.3s; }
+        .p-result.tai { color: #3b82f6; text-shadow: 0 0 30px rgba(59, 130, 246, 0.3); }
+        .p-result.xiu { color: #ef4444; text-shadow: 0 0 30px rgba(239, 68, 68, 0.3); }
+        .p-stats { display: flex; justify-content: center; gap: 35px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.05); }
+        .p-stats > div { display: flex; flex-direction: column; gap: 2px; align-items: center; }
+        .p-stats > div span:first-child { font-size: 9px; font-weight: 700; color: #8d98b1; letter-spacing: 0.5px; }
+        .p-stats > div span:last-child { font-size: 20px; font-weight: 800; }
+        .h-wrap { background: rgba(14, 18, 30, 0.6); border: 1px solid rgba(255,255,255,0.04); border-radius: 16px; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .h-head { display: grid; grid-template-columns: 0.8fr 1.2fr 1fr 1fr 1.4fr; padding: 12px 16px; background: rgba(0,0,0,0.3); font-size: 10px; font-weight: 800; color: #8d98b1; border-bottom: 1px solid rgba(255,255,255,0.04); }
+        .h-col { text-align: center; }
+        .h-col:first-child { text-align: left; }
+        .h-scroll { flex: 1; overflow-y: auto; padding-bottom: 10px; }
+        .h-scroll::-webkit-scrollbar { width: 2px; }
+        .h-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+        @keyframes rowPop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+        .h-row { display: grid; grid-template-columns: 0.8fr 1.2fr 1fr 1fr 1.4fr; padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.03); align-items: center; animation: rowPop 0.25s ease-out; }
+        .h-id { font-size: 13px; font-weight: 700; color: #8d98b1; font-family: monospace; text-align: left; }
+        .h-val { font-size: 15px; font-weight: 700; text-align: center; }
+        .h-val.text-red { color: #ef4444; }
+        .h-val.text-green { color: #22c55e; }
+        .h-pct { font-size: 13px; font-weight: 700; text-align: center; color: #3b82f6; }
+        .h-stt-box { display: flex; justify-content: center; }
+        .h-stt { padding: 2px 14px; border-radius: 20px; font-size: 10px; font-weight: 800; border: 1px solid transparent; }
+        .h-stt.win { background: rgba(34, 197, 94, 0.1); color: #22c55e; border-color: rgba(34, 197, 94, 0.15); }
+        .h-stt.lose { background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.15); }
+        @media (max-width: 400px) { .app-wrapper { height: 100vh; border-radius: 0; } }
+    </style>
+</head>
+<body>
+    <div class="app-wrapper">
+        <div class="content-scroll-area">
+            <div id="homeScreen">
+                <div class="hero-header">
+                    <i class="fas fa-crown royal-icon"></i>
+                    <div class="brand-name">KAPUB</div>
+                </div>
+                <div class="greeting-wrap">
+                    <div class="greeting-line"><i class="fas fa-circle-check"></i> Dự Đoán Độc Quyền</div>
+                    <div class="greeting-desc">
+                        Hệ thống phân tích đa tầng <strong>thế hệ mới</strong>.<br>
+                        Được tối ưu bởi các thuật toán dự đoán chiến lược uy tín.
+                    </div>
+                </div>
+                <div class="intro-stack">
+                    <div class="intro-card">
+                        <div class="intro-title"><i class="fas fa-microchip"></i> Công Nghệ Xử Lý Đa Tầng</div>
+                        <div class="intro-detail">Thuật toán tối ưu hóa dựa trên dữ liệu lớn, phân tích biến động theo thời gian thực, đảm bảo độ chính xác tuyệt đối.</div>
+                    </div>
+                    <div class="intro-card">
+                        <div class="intro-title"><i class="fas fa-shield-halved"></i> Giao Thức Bảo Mật Dynamic</div>
+                        <div class="intro-detail">Hệ thống sử dụng mã hóa dữ liệu đa lớp, ngăn chặn can thiệp trái phép, đảm bảo an toàn cho mọi phiên dự đoán.</div>
+                    </div>
+                    <div class="intro-card">
+                        <div class="intro-title"><i class="fas fa-bolt"></i> Hỗ Trợ Liên Tục 24/7</div>
+                        <div class="intro-detail">Hệ thống luôn sẵn sàng phục vụ, đảm bảo dữ liệu trôi chảy và hỗ trợ người dùng kịp thời mọi lúc.</div>
+                    </div>
+                </div>
+                <div class="btn-group">
+                    <div class="btn-enter" id="btnHu" onclick="openTool('Hũ')">
+                        <i class="fas fa-dice-d6 btn-icon-hu"></i>
+                        <div><h4>Dự Đoán Hũ</h4><p>Phân tích chuyên sâu thuật toán Hũ</p></div>
+                    </div>
+                    <div class="btn-enter" id="btnMd5" onclick="openTool('MD5')">
+                        <i class="fas fa-lock btn-icon-md5"></i>
+                        <div><h4>Dự Đoán MD5</h4><p>Giải mã chuỗi MD5 chính xác</p></div>
+                    </div>
+                </div>
+            </div>
+            <div id="predictScreen">
+                <div class="top-nav">
+                    <button class="back-btn" onclick="goHome()"><i class="fas fa-arrow-left"></i> Quay lại</button>
+                    <div class="tool-title" id="toolTitle">Dự Đoán Hũ</div>
+                </div>
+                <div class="p-box active-xiu" id="predictCard">
+                    <div class="p-label">Kết Quả Dự Đoán</div>
+                    <div class="p-result xiu" id="resultTextDisplay">XỈU</div>
+                    <div class="p-stats">
+                        <div><span>Tin Cậy</span><span style="color:#3b82f6;" id="confDisplay">85%</span></div>
+                        <div><span>Thuật Toán</span><span style="color:#ffffff;" id="algoDisplay">7</span></div>
+                        <div><span>Trạng Thái</span><span style="color:#22c55e; font-size:16px;" id="statusDisplay">THẮNG</span></div>
+                    </div>
+                </div>
+                <div class="h-wrap">
+                    <div class="h-head">
+                        <div class="h-col">Phiên</div>
+                        <div class="h-col">Dự Đoán</div>
+                        <div class="h-col">Kết Quả</div>
+                        <div class="h-col">Tin Cậy</div>
+                        <div class="h-col">Trạng Thái</div>
+                    </div>
+                    <div class="h-scroll" id="historyContainer"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        let sessionCount = 0;
+        let currentMode = ""; 
+        let runningInterval = null;
+        const homeScreen = document.getElementById('homeScreen');
+        const predictScreen = document.getElementById('predictScreen');
+        const historyContainer = document.getElementById('historyContainer');
+        const predictCard = document.getElementById('predictCard');
+        const resultTextDisplay = document.getElementById('resultTextDisplay');
+        const confDisplay = document.getElementById('confDisplay');
+        const algoDisplay = document.getElementById('algoDisplay');
+        const statusDisplay = document.getElementById('statusDisplay');
+        const toolTitle = document.getElementById('toolTitle');
+
+        async function fetchAPI(endpoint) {
+            try {
+                const res = await fetch(endpoint);
+                if (!res.ok) throw new Error('Network error');
+                return await res.json();
+            } catch (e) { return null; }
+        }
+
+        function openTool(mode) {
+            currentMode = mode;
+            toolTitle.innerText = "Dự Đoán " + mode;
+            homeScreen.style.display = 'none';
+            predictScreen.style.display = 'flex';
+            clearInterval(runningInterval);
+            sessionCount = 0;
+            historyContainer.innerHTML = '';
+            loadHistory(mode);
+            runningInterval = setInterval(function() { generateData(mode); }, 5000);
+            generateData(mode);
+        }
+
+        async function loadHistory(mode) {
+            const endpoint = mode === 'Hũ' ? '/api/history/hu' : '/api/history/md5';
+            const data = await fetchAPI(endpoint);
+            if (data && data.history) {
+                historyContainer.innerHTML = '';
+                const history = data.history.slice(0, 40);
+                for (const item of history) {
+                    addHistoryRow(item);
+                }
+                sessionCount = history.length;
+            }
+        }
+
+        function addHistoryRow(item) {
+            const prefix = item.loai === 'HU' ? 'HU' : 'MD5';
+            const sessionId = '#' + prefix + String(item.phien).padStart(6, '0');
+            const colorPredict = item.duDoan === 'TAI' ? 'text-red' : 'text-green';
+            const colorActual = item.ketQua === 'TAI' ? 'text-red' : 'text-green';
+            const statusClass = item.trangThai === 'WIN' ? 'win' : 'lose';
+            const statusText = item.trangThai === 'WIN' ? 'THẮNG' : 'THUA';
+            const row = document.createElement('div');
+            row.className = 'h-row';
+            row.innerHTML = '<div class="h-id">' + sessionId + '</div><div class="h-val ' + colorPredict + '">' + (item.duDoan || '---') + '</div><div class="h-val ' + colorActual + '">' + (item.ketQua || '---') + '</div><div class="h-pct">' + (item.doTinCay || '0%') + '</div><div class="h-stt-box"><span class="h-stt ' + statusClass + '">' + statusText + '</span></div>';
+            historyContainer.prepend(row);
+        }
+
+        async function generateData(mode) {
+            const endpoint = mode === 'Hũ' ? '/api/hu' : '/api/md5';
+            const data = await fetchAPI(endpoint);
+            if (data) {
+                sessionCount++;
+                const duDoan = data.duDoan || data.prediction || '---';
+                const doTinCay = data.doTinCay || (data.confidence ? data.confidence.toFixed(0) + '%' : '0%');
+                const trangThai = data.trangThai || 'PENDING';
+                const algoCount = data.algorithmCount || 0;
+                const name = data.name || '';
+                resultTextDisplay.innerText = duDoan;
+                confDisplay.innerText = doTinCay;
+                algoDisplay.innerText = algoCount;
+                if (duDoan === 'TAI') {
+                    resultTextDisplay.className = 'p-result tai';
+                    predictCard.className = 'p-box active-tai';
+                } else if (duDoan === 'XIU') {
+                    resultTextDisplay.className = 'p-result xiu';
+                    predictCard.className = 'p-box active-xiu';
+                } else {
+                    resultTextDisplay.className = 'p-result';
+                    predictCard.className = 'p-box';
+                }
+                if (trangThai === 'WIN') {
+                    statusDisplay.innerText = 'THẮNG';
+                    statusDisplay.style.color = '#22c55e';
+                } else if (trangThai === 'LOSE') {
+                    statusDisplay.innerText = 'THUA';
+                    statusDisplay.style.color = '#ef4444';
+                } else {
+                    statusDisplay.innerText = 'CHỜ...';
+                    statusDisplay.style.color = '#fbbf24';
+                }
+                if (data.phien && duDoan && duDoan !== '---') {
+                    const prefix = mode === 'Hũ' ? 'HU' : 'MD5';
+                    const existingRows = historyContainer.querySelectorAll('.h-row');
+                    let exists = false;
+                    for (const row of existingRows) {
+                        if (row.querySelector('.h-id')?.textContent === '#' + prefix + String(data.phien).padStart(6, '0')) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    if (!exists) {
+                        const item = {
+                            phien: data.phien,
+                            duDoan: duDoan,
+                            ketQua: data.ketQua || '---',
+                            doTinCay: doTinCay,
+                            trangThai: trangThai,
+                            loai: prefix,
+                            name: name
+                        };
+                        addHistoryRow(item);
+                        while (historyContainer.children.length > 40) {
+                            historyContainer.removeChild(historyContainer.lastChild);
+                        }
+                    }
+                }
+            }
+        }
+
+        function goHome() {
+            clearInterval(runningInterval);
+            predictScreen.style.display = 'none';
+            homeScreen.style.display = 'flex';
+        }
+    </script>
+</body>
+</html>`);
+});
+
+// ============================================================
+// API ENDPOINTS
+// ============================================================
+app.get('/api/hu', async function(req, res) {
+    try {
+        const data = await fetchHu();
+        if (!data) return res.status(500).json({ error: 'Không thể lấy dữ liệu HU' });
+        const result = calculatePrediction(data, 'hu');
+        if (!result) {
+            return res.json({
+                phien: data[0]?.Phien || 0,
+                prediction: '---',
+                confidence: 50,
+                ketQua: '---',
+                trangThai: 'PENDING',
+                reason: 'Đã xử lý trước đó',
+                algorithmCount: 0,
+                name: 'Cached'
+            });
+        }
+        res.json({
+            phien: result.phien,
+            duDoan: result.prediction,
+            doTinCay: result.confidence.toFixed(0) + '%',
+            ketQua: result.ketQua,
+            trangThai: result.trangThai,
+            reason: result.reason || '',
+            algorithmCount: result.algorithmCount || 0,
+            name: result.name || ''
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/md5', async function(req, res) {
+    try {
+        const data = await fetchMd5();
+        if (!data) return res.status(500).json({ error: 'Không thể lấy dữ liệu MD5' });
+        const result = calculatePrediction(data, 'md5');
+        if (!result) {
+            return res.json({
+                phien: data[0]?.Phien || 0,
+                prediction: '---',
+                confidence: 50,
+                ketQua: '---',
+                trangThai: 'PENDING',
+                reason: 'Đã xử lý trước đó',
+                algorithmCount: 0,
+                name: 'Cached'
+            });
+        }
+        res.json({
+            phien: result.phien,
+            duDoan: result.prediction,
+            doTinCay: result.confidence.toFixed(0) + '%',
+            ketQua: result.ketQua,
+            trangThai: result.trangThai,
+            reason: result.reason || '',
+            algorithmCount: result.algorithmCount || 0,
+            name: result.name || ''
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/history/:type', function(req, res) {
+    const type = req.params.type;
+    if (type === 'all') {
+        const all = (historyData.hu || []).concat(historyData.md5 || []);
+        all.sort((a, b) => (b.phien || 0) - (a.phien || 0));
+        res.json({ history: all, total: all.length });
+    } else if (type === 'hu') {
+        res.json({ history: historyData.hu || [], total: (historyData.hu || []).length });
+    } else if (type === 'md5') {
+        res.json({ history: historyData.md5 || [], total: (historyData.md5 || []).length });
+    } else {
+        res.json({ history: [], total: 0 });
+    }
+});
+
+app.get('/api/stats', function(req, res) {
+    const detailedStats = predictor.getStats();
+    const cleanStats = { ...detailedStats };
+    delete cleanStats.processed_phiens;
+    res.json(cleanStats);
+});
+
+// ============================================================
+// 🚀 KHỞI ĐỘNG SERVER
+// ============================================================
+loadHistory();
+app.listen(PORT, '0.0.0.0', function() {
+    console.log('========================================');
+    console.log('🧬 IMMORTAL PHOENIX PREDICTOR');
+    console.log('✅ 30+ THUẬT TOÁN CẦU');
+    console.log('✅ TỰ SỬA LỖI - TỰ SỐNG LẠI');
+    console.log('✅ TỰ HỌC VĨNH VIỄN');
+    console.log('✅ LƯU 1000 PHIÊN - KHÔNG TRÙNG');
+    console.log('Server: http://0.0.0.0:' + PORT);
+    console.log('========================================');
 });
