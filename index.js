@@ -894,10 +894,15 @@ class TX_LogicPen_IMMORTAL_PHOENIX {
         this.lastResult = null;
         this.errorStreak = 0;
         this.totalPredictions = 0;
+        this.lastPredictionTime = null;
     }
 
     loadData(data) {
         try {
+            if (!data || !Array.isArray(data) || data.length === 0) {
+                this.healer.reportError('LOAD', 'No data');
+                return;
+            }
             this.history = [...data].sort((a, b) => (b.phien || 0) - (a.phien || 0));
             const arr = this._arr();
             const points = this._points();
@@ -926,11 +931,15 @@ class TX_LogicPen_IMMORTAL_PHOENIX {
 
     predict(data) {
         try {
+            if (!data || !Array.isArray(data) || data.length === 0) {
+                this.healer.reportError('PREDICT', 'No data');
+                return { pred: 'TAI', conf: 50, name: 'NO_DATA', reason: 'Không có dữ liệu' };
+            }
             this.loadData(data);
             const arr = this._arr();
             const points = this._points();
             if (arr.length < 2) {
-                return { pred: arr[0] || 'TAI', conf: 50, name: 'NO_DATA' };
+                return { pred: arr[0] || 'TAI', conf: 50, name: 'NO_DATA', reason: 'Dữ liệu không đủ' };
             }
             const cauResults = this.cauAlgorithms.runAll(arr, points);
             const diceResults = this.diceAnalyzer.analyzeAll(points, arr);
@@ -938,6 +947,7 @@ class TX_LogicPen_IMMORTAL_PHOENIX {
             const result = this.ensemble.combine(cauResults, diceResults, learningResults);
             this.lastResult = result;
             this.totalPredictions++;
+            this.lastPredictionTime = Date.now();
             stats.last_prediction = result.pred;
             stats.total_predictions_made++;
             stats.prediction_started = true;
@@ -949,18 +959,24 @@ class TX_LogicPen_IMMORTAL_PHOENIX {
         } catch (e) {
             this.healer.reportError('PREDICT', e.message);
             this.healer.selfHeal();
-            return { pred: 'TAI', conf: 50, name: 'ERROR_FALLBACK' };
+            return { pred: 'TAI', conf: 50, name: 'ERROR_FALLBACK', reason: 'Lỗi hệ thống: ' + e.message };
         }
     }
 
+    // ✅ SỬA: updateStatus trả về boolean
     updateStatus(actual) {
         try {
-            if (!this.lastResult) return;
+            if (!this.lastResult) return false;
+            if (!actual) return false;
+            
             const a = actual.toUpperCase().replace('XỈU', 'XIU').replace('TÀI', 'TAI');
+            if (a !== 'TAI' && a !== 'XIU') return false;
+            
             const wasCorrect = this.lastResult.pred === a;
             const arr = this._arr();
             const points = this._points();
             this.eternalLearning.learn(arr, points, this.lastResult, a);
+            
             if (wasCorrect) {
                 this.errorStreak = 0;
                 stats.streak_correct++;
@@ -985,9 +1001,12 @@ class TX_LogicPen_IMMORTAL_PHOENIX {
                 streak: stats.streak_correct
             });
             if (stats.history.length > 5000) stats.history.shift();
+            
+            return wasCorrect;
         } catch (e) {
             this.healer.reportError('UPDATE', e.message);
             this.healer.selfHeal();
+            return false;
         }
     }
 
@@ -1018,20 +1037,21 @@ const predictor = new TX_LogicPen_IMMORTAL_PHOENIX();
 // 📡 LẤY DỮ LIỆU API
 // ============================================================
 function transformData(apiData) {
-    if (!apiData || !apiData.list) return null;
+    if (!apiData || !apiData.list || !Array.isArray(apiData.list) || apiData.list.length === 0) return null;
     const result = [];
     for (let i = 0; i < apiData.list.length; i++) {
         const item = apiData.list[i];
+        if (!item || !item.id) continue;
         result.push({
             Phien: item.id,
             Ket_qua: item.resultTruyenThong === 'TAI' ? 'T' : 'X',
-            d1: item.dices[0],
-            d2: item.dices[1],
-            d3: item.dices[2],
-            Tong: item.point
+            d1: item.dices && item.dices.length > 0 ? item.dices[0] : 1,
+            d2: item.dices && item.dices.length > 1 ? item.dices[1] : 1,
+            d3: item.dices && item.dices.length > 2 ? item.dices[2] : 1,
+            Tong: item.point || 0
         });
     }
-    return result;
+    return result.length > 0 ? result : null;
 }
 
 async function fetchHu() {
@@ -1090,12 +1110,27 @@ function saveHistory() {
 // ============================================================
 function calculatePrediction(data, type) {
     try {
+        // ✅ SỬA: Kiểm tra dữ liệu đầu vào
+        if (!data || !Array.isArray(data) || data.length === 0) {
+            return {
+                phien: 0,
+                prediction: '---',
+                confidence: 50,
+                ketQua: '---',
+                trangThai: 'PENDING',
+                algorithmCount: 0,
+                reason: 'Không có dữ liệu',
+                name: 'No Data'
+            };
+        }
+        
         const phien = data[0]?.Phien || 0;
         const ketQuaRaw = data[0]?.Ket_qua || 'X';
         const ketQua = ketQuaRaw === 'T' ? 'TAI' : 'XIU';
         
+        // ✅ SỬA: Kiểm tra đã xử lý chưa
         if (stats.processed_phiens[phien]) {
-            const existing = historyData[type].find(r => r.phien === phien);
+            const existing = historyData[type]?.find(r => r.phien === phien);
             if (existing) {
                 return {
                     prediction: existing.duDoan,
@@ -1134,11 +1169,13 @@ function calculatePrediction(data, type) {
         
         if (phien > stats.last_phien) stats.last_phien = phien;
         
+        // ✅ SỬA: updateStatus trả về boolean
         const isCorrect = predictor.updateStatus(ketQua);
         const trangThai = isCorrect ? 'WIN' : 'LOSE';
         
         stats.processed_phiens[phien] = trangThai;
         
+        if (!historyData[type]) historyData[type] = [];
         const existingIndex = historyData[type].findIndex(r => r.phien === phien);
         
         const record = {
@@ -1181,12 +1218,21 @@ function calculatePrediction(data, type) {
         };
     } catch (e) {
         console.error('Calculate prediction error:', e.message);
-        return null;
+        return {
+            phien: 0,
+            prediction: '---',
+            confidence: 50,
+            ketQua: '---',
+            trangThai: 'ERROR',
+            algorithmCount: 0,
+            reason: 'Lỗi: ' + e.message,
+            name: 'Error'
+        };
     }
 }
 
 // ============================================================
-// 🚀 ROUTES - GIAO DIỆN MỚI
+// 🚀 ROUTES
 // ============================================================
 
 app.get('/', function(req, res) {
@@ -1394,7 +1440,11 @@ app.get('/', function(req, res) {
             toolTitle.innerText = "Dự Đoán " + mode;
             homeScreen.style.display = 'none';
             predictScreen.style.display = 'flex';
-            clearInterval(runningInterval);
+            // ✅ SỬA: clear interval cũ trước khi tạo mới
+            if (runningInterval) {
+                clearInterval(runningInterval);
+                runningInterval = null;
+            }
             sessionCount = 0;
             historyContainer.innerHTML = '';
             loadHistory(mode);
@@ -1491,7 +1541,11 @@ app.get('/', function(req, res) {
         }
 
         function goHome() {
-            clearInterval(runningInterval);
+            // ✅ SỬA: clear interval khi về home
+            if (runningInterval) {
+                clearInterval(runningInterval);
+                runningInterval = null;
+            }
             predictScreen.style.display = 'none';
             homeScreen.style.display = 'flex';
         }
@@ -1506,13 +1560,23 @@ app.get('/', function(req, res) {
 app.get('/api/hu', async function(req, res) {
     try {
         const data = await fetchHu();
-        if (!data) return res.status(500).json({ error: 'Không thể lấy dữ liệu HU' });
+        if (!data) {
+            return res.status(503).json({ 
+                error: 'Không thể lấy dữ liệu HU',
+                phien: 0,
+                duDoan: '---',
+                doTinCay: '0%',
+                ketQua: '---',
+                trangThai: 'ERROR',
+                algorithmCount: 0
+            });
+        }
         const result = calculatePrediction(data, 'hu');
         if (!result) {
             return res.json({
                 phien: data[0]?.Phien || 0,
-                prediction: '---',
-                confidence: 50,
+                duDoan: '---',
+                doTinCay: '0%',
                 ketQua: '---',
                 trangThai: 'PENDING',
                 reason: 'Đã xử lý trước đó',
@@ -1531,20 +1595,36 @@ app.get('/api/hu', async function(req, res) {
             name: result.name || ''
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('API HU error:', e.message);
+        res.status(500).json({ 
+            error: e.message,
+            duDoan: '---',
+            doTinCay: '0%',
+            trangThai: 'ERROR'
+        });
     }
 });
 
 app.get('/api/md5', async function(req, res) {
     try {
         const data = await fetchMd5();
-        if (!data) return res.status(500).json({ error: 'Không thể lấy dữ liệu MD5' });
+        if (!data) {
+            return res.status(503).json({ 
+                error: 'Không thể lấy dữ liệu MD5',
+                phien: 0,
+                duDoan: '---',
+                doTinCay: '0%',
+                ketQua: '---',
+                trangThai: 'ERROR',
+                algorithmCount: 0
+            });
+        }
         const result = calculatePrediction(data, 'md5');
         if (!result) {
             return res.json({
                 phien: data[0]?.Phien || 0,
-                prediction: '---',
-                confidence: 50,
+                duDoan: '---',
+                doTinCay: '0%',
                 ketQua: '---',
                 trangThai: 'PENDING',
                 reason: 'Đã xử lý trước đó',
@@ -1563,30 +1643,70 @@ app.get('/api/md5', async function(req, res) {
             name: result.name || ''
         });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('API MD5 error:', e.message);
+        res.status(500).json({ 
+            error: e.message,
+            duDoan: '---',
+            doTinCay: '0%',
+            trangThai: 'ERROR'
+        });
     }
 });
 
 app.get('/api/history/:type', function(req, res) {
-    const type = req.params.type;
-    if (type === 'all') {
-        const all = (historyData.hu || []).concat(historyData.md5 || []);
-        all.sort((a, b) => (b.phien || 0) - (a.phien || 0));
-        res.json({ history: all, total: all.length });
-    } else if (type === 'hu') {
-        res.json({ history: historyData.hu || [], total: (historyData.hu || []).length });
-    } else if (type === 'md5') {
-        res.json({ history: historyData.md5 || [], total: (historyData.md5 || []).length });
-    } else {
-        res.json({ history: [], total: 0 });
+    try {
+        const type = req.params.type;
+        if (type === 'all') {
+            const all = (historyData.hu || []).concat(historyData.md5 || []);
+            all.sort((a, b) => (b.phien || 0) - (a.phien || 0));
+            res.json({ history: all, total: all.length });
+        } else if (type === 'hu') {
+            res.json({ history: historyData.hu || [], total: (historyData.hu || []).length });
+        } else if (type === 'md5') {
+            res.json({ history: historyData.md5 || [], total: (historyData.md5 || []).length });
+        } else {
+            res.status(400).json({ error: 'Invalid type. Use: all, hu, md5' });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
     }
 });
 
 app.get('/api/stats', function(req, res) {
-    const detailedStats = predictor.getStats();
-    const cleanStats = { ...detailedStats };
-    delete cleanStats.processed_phiens;
-    res.json(cleanStats);
+    try {
+        const detailedStats = predictor.getStats();
+        const cleanStats = { ...detailedStats };
+        delete cleanStats.processed_phiens;
+        res.json(cleanStats);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ✅ THÊM: Health check endpoint
+app.get('/api/health', function(req, res) {
+    res.json({
+        status: 'online',
+        timestamp: vnNow(),
+        version: stats.model_version,
+        total_predictions: stats.total_predictions_made,
+        healer_status: predictor.healer.getStatus()
+    });
+});
+
+// ✅ THÊM: Force refresh endpoint
+app.post('/api/refresh', function(req, res) {
+    try {
+        // Reset cache
+        predictor.diceAnalyzer.predictionCache.clear();
+        res.json({ 
+            success: true, 
+            message: 'Cache cleared',
+            timestamp: vnNow()
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // ============================================================
@@ -1600,6 +1720,7 @@ app.listen(PORT, '0.0.0.0', function() {
     console.log('✅ TỰ SỬA LỖI - TỰ SỐNG LẠI');
     console.log('✅ TỰ HỌC VĨNH VIỄN');
     console.log('✅ LƯU 1000 PHIÊN - KHÔNG TRÙNG');
+    console.log('✅ ĐÃ SỬA LỖI LOGIC');
     console.log('Server: http://0.0.0.0:' + PORT);
     console.log('========================================');
 });
