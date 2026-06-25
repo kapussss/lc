@@ -1,4 +1,4 @@
-```javascript
+
 /**
  * ════════════════════════════════════════════════════════════════════
  * ║  🧬 TX_PREDICTOR_IMMORTAL_PHOENIX — BẤT TỬ PHƯỢNG HOÀNG    ║
@@ -1845,4 +1845,4 @@ app.listen(PORT, '0.0.0.0', function() {
     console.log('Server: http://0.0.0.0:' + PORT);
     console.log('========================================');
 });
-```
+
