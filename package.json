@@ -1,18 +1,32 @@
 {
   "name": "lau-cua-79-prediction-api",
-  "version": "4.0.0",
-  "description": "Advanced Tai Xiu Prediction API for Lau Cua 79",
+  "version": "5.0.0",
+  "description": "Advanced Tai Xiu Prediction API with Ensemble Learning & Auto-Correction",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "pm2": "pm2 start index.js --name md5-v5",
+    "pm2-stop": "pm2 stop md5-v5",
+    "pm2-restart": "pm2 restart md5-v5",
+    "pm2-logs": "pm2 logs md5-v5",
+    "reset": "node -e \"try{require('fs').unlinkSync('./v5_state.json')}catch(e){console.log('No state file')};console.log('State reset')\""
   },
-  "keywords": ["prediction", "tai-xiu", "lau-cua-79", "api"],
-  "author": "@mryanhdz",
+  "keywords": [
+    "prediction",
+    "tai-xiu",
+    "lau-cua-79",
+    "api",
+    "ensemble-learning",
+    "machine-learning",
+    "md5"
+  ],
+  "author": "@Kapub",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
-    "axios": "^1.6.0",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "node-fetch": "^2.6.7"
   },
   "engines": {
     "node": ">=18.0.0"
