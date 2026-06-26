@@ -1,8 +1,7 @@
 /**
  * ====================================================================
- * QUANTUM APEX TERMINAL - VERSION VIP V32 ULTIMATE
- * FEATURE: BREAK-POINT SNIPER & MEAN REVERSION ENGINE
- * FIX: NO MORE FOLLOW TILL DEAD - ULTIMATE REVERSAL DETECTION
+ * QUANTUM APEX TERMINAL - VERSION VIP V33 ULTIMATE
+ * FIX: INSTANT ALTERNATION OVERRIDE & FAST RL DECAY & DOUBLE-LOSS INVERTER
  * ====================================================================
  */
 
@@ -43,12 +42,25 @@ class QuantumApexPredictor {
         this.lichSuMD5 = new Array();       
         this.algoScores = {}; 
         this.lastPredictions = {}; 
+        this.recentLosses = 0; // Đếm số lần thua gần nhất để kích hoạt Inverter
         this.algos = this.initAlgos();
     }
 
     initAlgos() {
         return {
-            // 1. STREAK BREAKER SNIPER (Anti-Follow till dead)
+            // 1. INSTANT ALTERNATION (Bắt cầu 1-1 cực nhanh)
+            InstantAlt: () => {
+                if (this.lichSu.length < 4) return "TAI";
+                const l = this.lichSu;
+                const n = l.length;
+                // T-X-T hoặc X-T-X
+                if (l[n-1] !== l[n-2] && l[n-2] !== l[n-3] && l[n-1] === l[n-3]) {
+                    return l[n-1] === "TAI" ? "XIU" : "TAI";
+                }
+                return l[n-1];
+            },
+            
+            // 2. STREAK BREAKER SNIPER
             StreakSniper: () => {
                 if (this.lichSu.length < 20) return "TAI";
                 const last = this.lichSu[this.lichSu.length - 1];
@@ -56,51 +68,34 @@ class QuantumApexPredictor {
                 for (let i = this.lichSu.length - 2; i >= 0; i--) {
                     if (this.lichSu[i] === last) currStreak++; else break;
                 }
-                // Calculate avg streak length in history
                 let streaks = [], tempS = 1;
                 for (let i = 1; i < this.lichSu.length; i++) {
                     if (this.lichSu[i] === this.lichSu[i-1]) tempS++;
                     else { streaks.push(tempS); tempS = 1; }
                 }
                 const avgStreak = streaks.reduce((a,b)=>a+b,0) / (streaks.length || 1);
-                
-                // If current streak is longer than average, highly likely to break
                 if (currStreak >= Math.ceil(avgStreak) + 1) return last === "TAI" ? "XIU" : "TAI";
                 return last;
             },
             
-            // 2. MEAN REVERSION SNIPER
+            // 3. MEAN REVERSION SNIPER
             MeanReversion: () => {
                 if (this.lichSu.length < 15) return "TAI";
                 const last10 = this.lichSu.slice(-10);
                 const taiCount = last10.filter(x => x === "TAI").length;
-                const xiuCount = 10 - taiCount;
-                
-                if (taiCount >= 7) return "XIU"; // Overbought
-                if (xiuCount >= 7) return "TAI"; // Oversold
+                if (taiCount >= 7) return "XIU"; 
+                if (10 - taiCount >= 7) return "TAI"; 
                 return this.lichSu[this.lichSu.length - 1];
             },
             
-            // 3. POINT EXHAUSTION (Physics reversal)
+            // 4. POINT EXHAUSTION
             PointExhaustion: () => {
                 if (this.lichSuDiem.length < 5) return "TAI";
                 const last3Pts = this.lichSuDiem.slice(-3);
                 const avgPt = last3Pts.reduce((a,b)=>a+b,0) / 3;
-                if (avgPt >= 15) return "XIU"; // High points exhaustion
-                if (avgPt <= 6) return "TAI";  // Low points exhaustion
+                if (avgPt >= 15) return "XIU"; 
+                if (avgPt <= 6) return "TAI";  
                 return avgPt >= 10.5 ? "TAI" : "XIU";
-            },
-            
-            // 4. ALTERNATION DETECTOR (Cầu 1-1)
-            Alternation: () => {
-                if (this.lichSu.length < 6) return "TAI";
-                const last6 = this.lichSu.slice(-6);
-                let altCount = 0;
-                for (let i = 1; i < 6; i++) {
-                    if (last6[i] !== last6[i-1]) altCount++;
-                }
-                if (altCount >= 5) return last6[last6.length-1] === "TAI" ? "XIU" : "TAI"; // Continue 1-1
-                return last6[last6.length-1];
             },
             
             // 5. MARKOV 4
@@ -135,7 +130,7 @@ class QuantumApexPredictor {
                 return s.TAI >= s.XIU ? "TAI" : "XIU";
             },
             
-            // 7. KNN PATTERN MATCH
+            // 7. KNN
             KNN: () => {
                 if (this.lichSu.length < 10) return "TAI";
                 const c = this.lichSu.slice(-4).join("");
@@ -148,7 +143,7 @@ class QuantumApexPredictor {
                 return t >= x ? "TAI" : "XIU";
             },
             
-            // 8. HMM VITERBI
+            // 8. HMM
             HMM: () => {
                 if (this.lichSu.length < 12) return "TAI";
                 const o = this.lichSu.slice(-12).map(x => x === "TAI" ? 0 : 1);
@@ -160,34 +155,7 @@ class QuantumApexPredictor {
                 return p[p.length - 1].s0 >= p[p.length - 1].s1 ? "TAI" : "XIU";
             },
             
-            // 9. RSI DIVERGENCE
-            RSI: () => {
-                if (this.lichSuDiem.length < 7) return "TAI";
-                const r = this.lichSuDiem.slice(-6);
-                let u = 0, d = 0;
-                for (let i = 1; i < 6; i++) {
-                    let v = r[i] - r[i - 1];
-                    if (v > 0) u += v; else d += Math.abs(v);
-                }
-                if (u === 0) return "XIU";
-                if (d === 0) return "TAI";
-                const rsi = 100 - (100 / (1 + u/d));
-                return rsi >= 50 ? "TAI" : "XIU";
-            },
-            
-            // 10. WAVE COLLAPSE
-            WaveCollapse: () => {
-                const obs = this.lichSu.slice(-8);
-                if (obs.length < 8) return "TAI";
-                let superPos = 0;
-                const weights = [1, 2, 3, 5, 8, 13, 21, 34];
-                for (let i = 0; i < 8; i++) {
-                    superPos += (obs[i] === "TAI" ? 1 : -1) * weights[i];
-                }
-                return superPos >= 0 ? "TAI" : "XIU";
-            },
-            
-            // 11. BAYESIAN NET
+            // 9. BAYESIAN
             Bayesian: () => {
                 if (this.lichSu.length < 5) return "TAI";
                 let tT = 0, tX = 0, xT = 0, xX = 0;
@@ -200,7 +168,7 @@ class QuantumApexPredictor {
                 return tX >= xX ? "TAI" : "XIU";
             },
             
-            // 12. DEEP SEQ MATCH
+            // 10. DEEP SEQ
             DeepSeq: () => {
                 if (this.lichSu.length < 20) return "TAI";
                 const c = this.lichSu.slice(-5).join("");
@@ -219,21 +187,18 @@ class QuantumApexPredictor {
     themKetQua(ketQua, tongDiem, xucXacArray, md5String) {
         if (!tongDiem) tongDiem = 10;
         if (!xucXacArray) xucXacArray = new Array(1, 2, 3);
-        if (!md5String) md5String = "000000000000000000000000";
+        if (!md5String) md5String = "000";
         const chuanHoa = (ketQua === "TAI" || ketQua === "TÀI") ? "TAI" : (ketQua === "XIU" || ketQua === "XỈU") ? "XIU" : (tongDiem >= 11 ? "TAI" : "XIU");
         
-        // 1. Cập nhật điểm RL dựa trên kết quả vừa ra
+        // 1. Cập nhật điểm RL
         if (Object.keys(this.lastPredictions).length > 0) {
-            const prevResult = this.lichSu[this.lichSu.length - 1];
-            const isStreakBreak = (chuanHoa !== prevResult);
-            
             for (let name in this.lastPredictions) {
                 if (!this.algoScores[name]) this.algoScores[name] = 0;
-                this.algoScores[name] *= 0.92; // Decay chậm hơn để giữ trend
+                this.algoScores[name] *= 0.75; // FAST DECAY: Phai mờ nhanh để quên trend cũ
                 if (this.lastPredictions[name] === chuanHoa) {
-                    this.algoScores[name] += isStreakBreak ? 3 : 1; // 3x reward cho việc đoán đúng break-point
+                    this.algoScores[name] += 2; // Reward
                 } else {
-                    this.algoScores[name] -= 0.5; 
+                    this.algoScores[name] -= 1.5; // Penalty nặng
                 }
             }
         }
@@ -263,29 +228,31 @@ class QuantumApexPredictor {
     duDoanChinhXac() {
         if (this.lichSu.length < 10) {
             this.lastPredictions = {};
-            return { duDoan: "TAI", doTinCay: 50, lyDo: "Đang nạp dữ liệu...", phase: "UNKNOWN", streakRisk: 0 };
+            return { duDoan: "TAI", doTinCay: 50, lyDo: "Đang nạp dữ liệu...", phase: "UNKNOWN", streakRisk: 0, dna: "---" };
         }
         
         let predictions = {};
         let tVotes = 0, xVotes = 0;
         const phase = this.getMarketPhase();
+        const l = this.lichSu;
+        const n = l.length;
         
-        // Lấy dự đoán từ tất cả thuật toán
+        // INSTANT ALTERNATION OVERRIDE LOGIC
+        let forceAlt = false;
+        if (n >= 4 && l[n-1] !== l[n-2] && l[n-2] !== l[n-3] && l[n-1] === l[n-3]) {
+            forceAlt = true;
+        }
+        
         for (let name in this.algos) {
             try {
                 const pred = this.algos[name].call(this);
                 predictions[name] = pred;
                 
                 let score = this.algoScores[name] || 0;
-                let weight = Math.max(0.2, Math.exp(score / 5)); 
+                let weight = Math.max(0.1, Math.exp(score / 4)); 
                 
-                // Tăng trọng số cho StreakSniper & MeanReversion nếu market TRENDING
-                if (phase === "TRENDING" && (name === "StreakSniper" || name === "MeanReversion")) {
-                    weight *= 2.5;
-                }
-                if (phase === "ALTERNATING" && name === "Alternation") {
-                    weight *= 2.5;
-                }
+                if (forceAlt && name === "InstantAlt") weight *= 10.0; // Ép trọng số cực mạnh
+                if (phase === "TRENDING" && name === "StreakSniper") weight *= 2.0;
                 
                 if (pred === "TAI") tVotes += weight; else xVotes += weight;
             } catch (e) {}
@@ -294,26 +261,38 @@ class QuantumApexPredictor {
         this.lastPredictions = predictions; 
         
         let decision = tVotes > xVotes ? "TAI" : "XIU";
+        
+        // DOUBLE-LOSS INVERTER LOGIC
+        if (this.recentLosses >= 2) {
+            decision = decision === "TAI" ? "XIU" : "TAI";
+            this.recentLosses = 0; // Reset sau khi đảo
+            xVotes = tVotes = 50; // Cân bằng để chạy logic confidence
+            if (decision === "TAI") tVotes = 80; else xVotes = 80;
+        }
+        
         let totalVotes = tVotes + xVotes;
         let confidence = totalVotes > 0 ? Math.round((Math.max(tVotes, xVotes) / totalVotes) * 100) : 50;
         
-        // Streak Risk Calculation
-        const last = this.lichSu[this.lichSu.length - 1];
+        const last = l[l.length - 1];
         let currStreak = 1;
-        for (let i = this.lichSu.length - 2; i >= 0; i--) {
-            if (this.lichSu[i] === last) currStreak++; else break;
+        for (let i = l.length - 2; i >= 0; i--) {
+            if (l[i] === last) currStreak++; else break;
         }
         const streakRisk = Math.min(100, currStreak * 20);
+        
+        // Market DNA
+        const dna = l.slice(-10).map(x => x === "TAI" ? "T" : "X").join("");
         
         let agreeCount = 0;
         for (let p in predictions) if (predictions[p] === decision) agreeCount++;
         
         return { 
             duDoan: decision, 
-            doTinCay: Math.min(95, Math.max(50, confidence)), 
-            lyDo: `Phase: ${phase} | ${agreeCount}/${Object.keys(predictions).length} Algos Agree`,
+            doTinCay: Math.min(95, Math.max(55, confidence)), 
+            lyDo: `Phase: ${phase} | ${agreeCount}/${Object.keys(predictions).length} Algos`,
             phase: phase,
-            streakRisk: streakRisk
+            streakRisk: streakRisk,
+            dna: dna
         };
     }
 }
@@ -340,15 +319,17 @@ async function checkPreviousPrediction() {
         tongDuDoan++;
         if (lastPrediction.du_doan === actualNorm) { 
             duDoanDung++; chuoiDungLienTiep++; chuoiSaiLienTiep = 0; 
+            predictor.recentLosses = 0;
         } else { 
             chuoiSaiLienTiep++; chuoiDungLienTiep = 0; 
+            predictor.recentLosses++; // Tăng bộ đếm thua
         }
         savePredictionHistory();
-        console.log(">>> [APEX V32] Phiên #" + targetId + " | ĐOÁN: " + lastPrediction.du_doan + " | THỰC TẾ: " + actualNorm + " => " + (lastPrediction.du_doan === actualNorm ? 'THẮNG' : 'THUA'));
+        console.log(">>> [APEX V33] Phiên #" + targetId + " | ĐOÁN: " + lastPrediction.du_doan + " | THỰC TẾ: " + actualNorm + " => " + (lastPrediction.du_doan === actualNorm ? 'THẮNG' : 'THUA'));
     }
 }
 
-// GIAO DIỆN BENTO GRID V32 (PREMIUM DARK)
+// GIAO DIỆN BENTO GRID V33
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -356,7 +337,7 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Apex V32 Terminal</title>
+        <title>Apex V33 Terminal</title>
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
         <style>
             :root {
@@ -391,6 +372,9 @@ app.get('/', (req, res) => {
             .risk-meter { display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--muted); text-transform: uppercase; }
             .risk-bar { width: 60px; height: 4px; background: #27272a; border-radius: 2px; overflow: hidden; }
             .risk-fill { height: 100%; background: var(--lose); transition: width 0.3s; }
+            
+            .dna-bar { display: flex; gap: 4px; height: 36px; padding: 8px; align-items: center; justify-content: center; }
+            .dna-txt { font-family: 'JetBrains Mono', monospace; font-size: 14px; letter-spacing: 4px; color: var(--text); }
             
             .viz-bar { display: flex; gap: 4px; height: 28px; padding: 8px; }
             .viz-block { flex: 1; border-radius: 4px; background: #18181b; transition: all 0.3s; }
@@ -433,7 +417,7 @@ app.get('/', (req, res) => {
     <body>
         <div class="app">
             <header>
-                <div class="brand"><span class="dot"></span>APEX V32</div>
+                <div class="brand"><span class="dot"></span>APEX V33</div>
                 <div class="status-txt" id="phien-txt">---...</div>
             </header>
             
@@ -448,6 +432,10 @@ app.get('/', (req, res) => {
                         <div class="risk-bar"><div class="risk-fill" id="risk-fill" style="width: 0%"></div></div>
                     </div>
                 </div>
+            </div>
+            
+            <div class="card dna-bar">
+                <div class="dna-txt" id="dna-txt">--- --- ---</div>
             </div>
             
             <div class="card viz-bar" id="viz-bar"></div>
@@ -505,6 +493,9 @@ app.get('/', (req, res) => {
                     pTag.innerText = d.phase || 'CHOPPY';
                     pTag.className = 'phase-tag ' + (d.phase || 'CHOPPY');
                     document.getElementById('risk-fill').style.width = (d.streak_risk || 0) + '%';
+                    
+                    const dnaEl = document.getElementById('dna-txt');
+                    dnaEl.innerText = d.dna || '--- --- ---';
                     
                     const acc = d.tong_phien > 0 ? ((d.thang / d.tong_phien) * 100).toFixed(1) : '0.0';
                     document.getElementById('val-acc').innerText = acc + '%';
@@ -574,10 +565,11 @@ app.get('/', (req, res) => {
 app.get('/api/dashboard-stats', (req, res) => {
     const duDoanLive = currentPrediction ? currentPrediction.du_doan : "TAI";
     const doTinCayLive = currentPrediction ? currentPrediction.do_tin_cay : 50;
-    const lyDoLive = currentPrediction ? currentPrediction.ly_do : "RL Engine V32 khởi tạo";
+    const lyDoLive = currentPrediction ? currentPrediction.ly_do : "RL Engine V33 khởi tạo";
     const phienHienTaiLive = currentPrediction ? currentPrediction.phien_hien_tai : 0;
     const phase = currentPrediction ? currentPrediction.phase : "CHOPPY";
     const streakRisk = currentPrediction ? currentPrediction.streakRisk : 0;
+    const dna = currentPrediction ? currentPrediction.dna : "---";
 
     const realAccuracy = tongDuDoan > 0 ? parseFloat(((duDoanDung / tongDuDoan) * 100).toFixed(1)) : 0.0;
 
@@ -601,6 +593,7 @@ app.get('/api/dashboard-stats', (req, res) => {
         ly_do_live: lyDoLive,
         phase: phase,
         streak_risk: streakRisk,
+        dna: dna,
         lich_su_20: predictor.lichSu.slice(-20).reverse(),
         top_algos: topAlgos,
         max_score: maxScore,
@@ -672,14 +665,15 @@ async function updateData() {
                     do_tin_cay: analysis.doTinCay, 
                     ly_do: analysis.lyDo,
                     phase: analysis.phase,
-                    streakRisk: analysis.streakRisk
+                    streakRisk: analysis.streakRisk,
+                    dna: analysis.dna
                 };
                 
                 if (!predictionHistory.find(p => p.phienId === currentId + 1)) {
                     predictionHistory.push({ phienId: currentId + 1, du_doan: formatResultName(analysis.duDoan), do_tin_cay: analysis.doTinCay, ly_do: analysis.lyDo, ket_qua_thuc: null, verified: false, timestamp: Date.now(), diem_so: null });
                     savePredictionHistory();
                 }
-                console.log(`[V32] #${currentId} -> Next: ${analysis.duDoan} (${analysis.doTinCay}%) | Phase: ${analysis.phase}`);
+                console.log(`[V33] #${currentId} -> Next: ${analysis.duDoan} (${analysis.doTinCay}%) | DNA: ${analysis.dna}`);
             }
         }
     } catch (e) {} finally { updateLock = false; }
@@ -720,9 +714,10 @@ async function initializeData() {
             do_tin_cay: analysis.doTinCay, 
             ly_do: analysis.lyDo,
             phase: analysis.phase,
-            streakRisk: analysis.streakRisk
+            streakRisk: analysis.streakRisk,
+            dna: analysis.dna
         };
-        console.log("[KHỞI ĐỘNG V32] Break-Point Sniper Engine Ready.");
+        console.log("[KHỞI ĐỘNG V33] Instant Alt Override & Inverter Ready.");
     }
 }
 
@@ -747,9 +742,9 @@ function savePredictionHistory() {
 
 app.listen(PORT, () => {
     console.log('==================================================');
-    console.log('  APEX V32 TERMINAL RUNNING ON PORT: ' + PORT);
-    console.log('  BREAK-POINT SNIPER & MEAN REVERSION ACTIVE');
-    console.log('  NO MORE FOLLOW TILL DEAD LOGIC');
+    console.log('  APEX V33 TERMINAL RUNNING ON PORT: ' + PORT);
+    console.log('  INSTANT ALTERNATION OVERRIDE ACTIVE');
+    console.log('  DOUBLE-LOSS INVERTER ACTIVE');
     console.log('==================================================\n');
     loadPredictionHistory(); 
     initializeData();        
